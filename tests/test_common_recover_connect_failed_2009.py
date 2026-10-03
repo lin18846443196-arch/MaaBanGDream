@@ -260,6 +260,7 @@ class ConnectionModalResourceTests(unittest.TestCase):
         self.assertTrue(recognize_retry('CooperativeConnectFailedRetryButton', image).hit)
         self.assertFalse(recognize_retry('CooperativeConnectFailedRetry', image).hit)
 
+    @unittest.skipUnless(POPUP.is_file(), '需要本地连接失败截图，公开仓库不包含原始截图')
     def test_real_maa_combined_recognition_and_negative_pages(self):
         # A separate process owns the real framework DLL; importing the unit
         # test agent selects its reverse-proxy DLL in this process.

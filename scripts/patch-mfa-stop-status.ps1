@@ -149,13 +149,14 @@ if (-not ($sdks -match '^10\.')) {
     throw 'Building the customized MFAAvalonia stop-status fix requires .NET SDK 10.'
 }
 
-& dotnet build $desktopProject -c Release -p:Platform=x64 -p:MaaBanGDreamPackageBuild=true "-p:CustomAfterMicrosoftCommonTargets=$(Join-Path $projectRoot 'packaging\RhythmPilot.targets')" --no-self-contained
+& dotnet build $desktopProject -c Release -p:Platform=x64 -p:MaaBanGDreamPackageBuild=true "-p:RhythmPilotBrandRoot=$(Join-Path $projectRoot 'packaging')" --no-self-contained
 if ($LASTEXITCODE -ne 0) {
     throw 'Unable to build the customized MFAAvalonia runtime.'
 }
 $updaterPublish = Join-Path $SourceRoot 'bin\UpdaterPublish'
 & dotnet publish $updaterProject -c Release -r win-x64 --self-contained true `
-    -p:PublishSingleFile=true -p:PublishTrimmed=true -p:TrimMode=link -o $updaterPublish
+    -p:PublishSingleFile=true -p:PublishTrimmed=true -p:TrimMode=link `
+    "-p:CustomAfterMicrosoftCommonTargets=$(Join-Path $projectRoot 'packaging\RhythmPilot.targets')" -o $updaterPublish
 if ($LASTEXITCODE -ne 0) { throw 'Unable to publish the customized portable updater.' }
 $builtUpdater = Join-Path $updaterPublish 'MFAUpdater.exe'
 if (-not (Test-Path -LiteralPath $builtUpdater)) { throw 'Portable updater executable was not produced.' }

@@ -232,6 +232,7 @@ foreach ($relativePath in @(
     'scripts\normalize-release-directory.ps1',
     'scripts\restart-release.ps1',
     'scripts\cleanup_runtime_artifacts.py',
+    'scripts\prepare_portable_runtime.py',
     'scripts\check_runtime.py',
     'scripts\sync_bestdori_catalog.py',
     'scripts\sync_bestdori_charts.py'

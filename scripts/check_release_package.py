@@ -30,6 +30,7 @@ REQUIRED_PATHS = (
     "resource/charts/manifest.json",
     "scripts/start-release.ps1",
     "scripts/cleanup_runtime_artifacts.py",
+    "scripts/prepare_portable_runtime.py",
     "scripts/restart-release.ps1",
     "scripts/normalize-release-directory.ps1",
     "scripts/sync_bestdori_catalog.py",

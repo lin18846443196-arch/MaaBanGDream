@@ -12,6 +12,7 @@ from agent.realtime.chart_timeline import (
 from agent.realtime.first_group_sync import (
     FirstGroupHeadDetector, FirstGroupSynchronizer, FirstGroupSyncConfig, ObservedHead,
 )
+from agent.realtime.vision_io import imread_unicode
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -430,11 +431,11 @@ class FirstGroupRealFixturesTests(unittest.TestCase):
     def test_pure_stage_lighting_does_not_extract_heads(self):
         for name in ("early-00.png", "early-trigger.png"):
             with self.subTest(name=name):
-                image = cv2.imread(str(FIXTURES / "cooperative-20260929" / name))
+                image = imread_unicode(FIXTURES / "cooperative-20260929" / name)
                 self.assertEqual(FirstGroupHeadDetector().detect(image, 0), [])
 
     def test_actual_type1_chord_detects_hold_and_skill_tap_before_band(self):
-        image = cv2.imread(str(FIXTURES / "cooperative-20260929" / "early-01.png"))
+        image = imread_unicode(FIXTURES / "cooperative-20260929" / "early-01.png")
         heads = FirstGroupHeadDetector().detect(image, 0)
         self.assertTrue(any(head.lane == 0 and head.kind == "hold" and 290 < head.y < 340 for head in heads))
         self.assertTrue(any(head.lane == 6 and head.kind == "tap" and 290 < head.y < 340 for head in heads))
@@ -443,7 +444,7 @@ class FirstGroupRealFixturesTests(unittest.TestCase):
         detector = _Detector()
         detector.heads = [ObservedHead(2, "tap", 450)]
         gate = FirstGroupSynchronizer(_chart(), detector=detector)
-        image = cv2.imread(str(FIXTURES / "cooperative-20261002" / "waiting-members.png"))
+        image = imread_unicode(FIXTURES / "cooperative-20261002" / "waiting-members.png")
         for index in range(6):
             sample = SimpleNamespace(image=image, captured_at=index*.03,
                                      consumed_at=index*.03+.002, capture_id=index,
