@@ -5,7 +5,7 @@ MaaBanGDream 的非商业许可证只覆盖项目有权许可的自有部分。�
 
 | 内容 | 位置或发布包内容 | 许可证 / 权利状态 |
 | --- | --- | --- |
-| MFAAvalonia（含定制版本） | Windows 发布包、`patches/` | GPL-3.0；发布包附带 `LICENSE-MFAAvalonia.txt` |
+| MFAAvalonia（含定制版本） | Windows 发布包、`patches/` | GPL-3.0；发布包附带 `LICENSE-MFAAvalonia.txt`，同一 Release 附完整定制源码 ZIP |
 | MaaFramework 与绑定 | Windows 发布包、Python 运行时 | LGPL-3.0；发布包附带 `LICENSE-MaaFramework-LGPL-3.0.md` |
 | EvATive7 minitouch | `agent/realtime/native/vendor/minitouch/` | Apache-2.0，目录内附许可证 |
 | nlohmann/json | `native/realtime/third_party/nlohmann/json.hpp` | MIT，版权与许可声明保留在文件内 |

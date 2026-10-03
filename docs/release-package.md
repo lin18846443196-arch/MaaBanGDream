@@ -41,7 +41,7 @@ MaaFramework 运行库、Python Agent、本地谱面和资源文件。
 仅准备配置的 `start-release.ps1 -NoLaunch` 不执行清理。
 
 客户端使用 MFA 原生 GitHub 更新入口检查和下载正式 Release。已存在便携 Python
-运行库时优先下载约 148 MiB 的 runtime-free 更新包；运行库缺失时回退完整包。
+运行库时优先下载约 156 MiB 的 runtime-free 更新包；运行库缺失时回退完整包。
 下载支持断点续传和 SHA-256 校验，MFA 退出后由独立更新器覆盖程序文件，并保留
 上述用户目录。谱面库继续通过“演出设置 → 谱面辅助 → 同步”独立更新。
 每个完整包和更新包都携带当前版本的 `resource/Release.md`，“关于我们 → 更新日志”
@@ -61,6 +61,9 @@ Windows 不支持透明效果或关闭系统透明效果时，更新器使用实
 - 只支持 Windows 10/11 x64；.NET 和 Python 运行时均已包含在发布包中。
 
 ## 源码与许可证
+
+同一 Release 附带 `RhythmPilot-v<版本>-MFA-source.zip`，提供定制桌面程序与更新器的
+完整源码、GPL 正文、品牌素材、构建命令及匹配二进制的源码清单。
 
 - RhythmPilot：<https://github.com/lin18846443196-arch/MaaBanGDream>
 - 上游 MaaBanGDream：<https://github.com/coatcn1/MaaBanGDream>

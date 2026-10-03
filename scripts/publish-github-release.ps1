@@ -31,6 +31,8 @@ if ($Publish) {
 }
 & $Python (Join-Path $PSScriptRoot 'check_release_package.py') $PackageRoot
 if ($LASTEXITCODE -ne 0) { throw 'Package validation failed.' }
+& $Python (Join-Path $PSScriptRoot 'create_mfa_source_archive.py') --package-root $PackageRoot --check
+if ($LASTEXITCODE -ne 0) { throw 'Desktop corresponding source archive validation failed.' }
 $assets = @()
 foreach ($suffix in @('.zip', '-update.zip')) {
     $archive = "$PackageRoot$suffix"
@@ -41,12 +43,22 @@ foreach ($suffix in @('.zip', '-update.zip')) {
     }
     $assets += @($archive, $checksum)
 }
+$mfaSourceArchive = Join-Path (Split-Path -Parent $PackageRoot) "RhythmPilot-v$version-MFA-source.zip"
+$assets += @($mfaSourceArchive, "$mfaSourceArchive.sha256")
 & $GitHubCli auth status --hostname github.com
 if ($LASTEXITCODE -ne 0) { throw 'GitHub login is required; no release has been created.' }
 & $GitHubCli api "repos/$repository/commits/$head" --silent
 if ($LASTEXITCODE -ne 0) { throw 'Push and review this commit in the target repository before creating the release.' }
-$remoteTag = @(& git -C $projectRoot ls-remote origin "refs/tags/$tag")
+$originUrl = (& git -C $projectRoot remote get-url --push origin).Trim().TrimEnd('/')
+if ($originUrl -notin @("https://github.com/$repository.git", "https://github.com/$repository", "git@github.com:$repository.git")) {
+    throw 'The origin push URL must point to the requested personal repository.'
+}
+$remoteTag = @(& git -C $projectRoot ls-remote origin "refs/tags/$tag" "refs/tags/${tag}^{}")
 if ($LASTEXITCODE -ne 0 -or $remoteTag.Count -eq 0) { throw "Push the reviewed $tag tag before creating the release." }
+$peeledTag = @($remoteTag | Where-Object { $_.EndsWith('^{}') })
+$tagCommit = (($remoteTag[0] -split '\s+')[0])
+if ($peeledTag.Count -gt 0) { $tagCommit = (($peeledTag[0] -split '\s+')[0]) }
+if ($tagCommit -ne $head) { throw 'The remote release tag differs from the package source commit.' }
 $releaseArguments = @('release', 'create', $tag, '--repo', $repository, '--verify-tag',
     '--title', "RhythmPilot $tag", '--notes-file', $notes)
 if (-not $Publish) { $releaseArguments += @('--draft', '--prerelease') }

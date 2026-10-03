@@ -31,6 +31,10 @@ Maa 项目和定制 MFA 使用独立 Git 仓库。Maa 仓库留存自己的源�
 
 产物是版本目录外壳的完整 ZIP、平铺的 runtime-free 更新 ZIP，分别附 `.sha256`。
 更新包不含 Python 运行库归档和谱面；不携带个人配置、账号、截图或诊断日志。
+同时生成 `RhythmPilot-v1.5.0-MFA-source.zip` 和摘要，包含实际构建提交的完整定制
+MFA 源码、GPL 正文、品牌构建输入、重建命令和 `SOURCE-INFO.json`。只导出已提交
+文件，不复制 `.git`、本机配置或构建目录。它与两个二进制包一同作为 Release 附件发布，
+发布脚本会校验源码提交和品牌摘要与 `BUILD-INFO.json` 一致。
 
 ## GitHub 留存与发布
 
