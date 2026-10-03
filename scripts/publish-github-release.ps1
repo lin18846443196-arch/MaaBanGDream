@@ -45,6 +45,12 @@ foreach ($suffix in @('.zip', '-update.zip')) {
 }
 $mfaSourceArchive = Join-Path (Split-Path -Parent $PackageRoot) "YesBanGDream-v$version-MFA-source.zip"
 $assets += @($mfaSourceArchive, "$mfaSourceArchive.sha256")
+$profileArchive = Join-Path (Split-Path -Parent $PackageRoot) "YesBanGDream-v$version-Expert-profiles.zip"
+$profileExpected = ((Get-Content "$profileArchive.sha256" -Raw) -split '\s+')[0]
+if ((Get-FileHash -LiteralPath $profileArchive -Algorithm SHA256).Hash -ne $profileExpected) {
+    throw 'Expert Profile archive SHA256 mismatch.'
+}
+$assets += @($profileArchive, "$profileArchive.sha256")
 & $GitHubCli auth status --hostname github.com
 if ($LASTEXITCODE -ne 0) { throw 'GitHub login is required; no release has been created.' }
 & $GitHubCli api "repos/$repository/commits/$head" --silent

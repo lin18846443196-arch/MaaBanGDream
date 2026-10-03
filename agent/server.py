@@ -4,6 +4,8 @@ import sys
 
 from maa.agent.agent_server import AgentServer
 from maa.tasker import Tasker
+from profile_defaults import seed_default_profiles
+from pathlib import Path
 
 from realtime.runtime_flags import (
     configure_agent_runtime_flags,
@@ -40,6 +42,8 @@ import realtime.daily_free_gacha  # noqa: F401 - registration happens at import 
 def main() -> None:
     if len(sys.argv) < 2:
         raise SystemExit("Maa Agent socket id is required")
+    project_root = Path(__file__).resolve().parents[1]
+    seed_default_profiles(project_root / "default-profiles", project_root / "profiles")
     runtime_flags = configure_agent_runtime_flags(sys.argv[1:-1])
     print(
         "Agent runtime flags: "

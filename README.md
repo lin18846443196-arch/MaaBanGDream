@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/woshiyigeanniu/YesBanGDream/releases/tag/v2.0.0"><img src="https://img.shields.io/badge/Version-v2.0.0-ff6f9f" alt="Version"></a>
+  <a href="https://github.com/woshiyigeanniu/YesBanGDream/releases/tag/v2.0.1"><img src="https://img.shields.io/badge/Version-v2.0.1-ff6f9f" alt="Version"></a>
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011%20x64-0078D4" alt="Windows">
   <img src="https://img.shields.io/badge/MaaFramework-5.10.2-4c8bf5" alt="MaaFramework">
   <img src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" alt="Python">
@@ -18,9 +18,11 @@
 
 YesBanGDream 是基于 [MaaBanGDream](https://github.com/coatcn1/MaaBanGDream) 的非官方版本，由 **woshiyigeanniu** 独立维护，使用 [MaaFramework](https://github.com/MaaXYZ/MaaFramework) 和定制 MFAAvalonia 控制 Android 模拟器。
 
-当前发布版本为 **2.0.0**，以本地定制的上游 **1.4.3** 为基线，已同步上游 **1.4.4 / 1.4.5** 的相关改进。项目名称、图标、更新源和版本号独立维护；仓库地址继续使用 `woshiyigeanniu/YesBanGDream`。
+当前发布版本为 **2.0.1**，以本地定制的上游 **1.4.3** 为基线，已同步上游 **1.4.4 / 1.4.5** 的相关改进。项目名称、图标、更新源和版本号独立维护；仓库地址继续使用 `woshiyigeanniu/YesBanGDream`。
 
-[下载 Releases](https://github.com/woshiyigeanniu/YesBanGDream/releases) · [问题反馈](https://github.com/woshiyigeanniu/YesBanGDream/issues) · [2.0.0 版本说明](docs/release-notes-v2.0.0.md)
+2.0.1 更新双角色相框图标，修复协力准备页误判、直接启动时的 Profile 通信错误及 MuMu 前台额外切换；同时提供 Legacy / Native Expert 默认校准。最近一次 MuMu Native Expert 协力完成 5/5，具体结果与保留的问题见 [验证状态](docs/validation-v2.0.1.md)。
+
+[下载 Releases](https://github.com/woshiyigeanniu/YesBanGDream/releases) · [问题反馈](https://github.com/woshiyigeanniu/YesBanGDream/issues) · [2.0.1 版本说明](docs/release-notes-v2.0.1.md)
 
 ## 功能总览
 
@@ -73,18 +75,19 @@ YesBanGDream 是基于 [MaaBanGDream](https://github.com/coatcn1/MaaBanGDream) �
 
 ## 下载与首次使用
 
-前往 [YesBanGDream v2.0.0 Release](https://github.com/woshiyigeanniu/YesBanGDream/releases/tag/v2.0.0)，按用途选择附件：
+前往 [YesBanGDream v2.0.1 Release](https://github.com/woshiyigeanniu/YesBanGDream/releases/tag/v2.0.1)，按用途选择附件：
 
 | 文件 | 用途 |
 | --- | --- |
-| `YesBanGDream-v2.0.0-win-x64.zip` | 首次安装的完整便携包，包含桌面客户端、更新器、Python / .NET 运行时、Agent、模型和本地谱面。 |
-| `YesBanGDream-v2.0.0-win-x64-update.zip` | 已有兼容便携环境的更新包；不含 Python 运行库归档及谱面库。 |
-| `YesBanGDream-v2.0.0-MFA-source.zip` | 对应定制桌面客户端和更新器的完整源码及品牌构建输入。 |
+| `YesBanGDream-v2.0.1-win-x64.zip` | 首次安装的完整便携包，包含桌面客户端、更新器、Python / .NET 运行时、Agent、模型和本地谱面。 |
+| `YesBanGDream-v2.0.1-win-x64-update.zip` | 已有兼容便携环境的更新包；不含 Python 运行库归档及谱面库。 |
+| `YesBanGDream-v2.0.1-MFA-source.zip` | 对应定制桌面客户端和更新器的完整源码及品牌构建输入。 |
+| `YesBanGDream-v2.0.1-Expert-profiles.zip` | Legacy / Native Expert 两份校准及导入说明，便于已有安装手动补齐。 |
 
 1. 将完整包**完全解压到新目录**，不要在压缩软件内直接运行，也不要直接覆盖旧安装。
 2. 双击 **`启动 YesBanGDream.cmd`**。首次启动会在当前目录的 `runtime` 下展开固定 Python 环境，并检查运行时版本。
 3. 在客户端添加或选择 Android 模拟器，设置 **1280 × 720、DPI 240**；当前任务资源面向**哔哩哔哩服**。
-4. 按下方建议配置游戏；需要实时演奏时，先运行“实时演奏校准”，再在“设置 → 演出设置 → 实时演奏 Profile”确认所选 Profile。
+4. 按下方建议配置游戏。环境匹配时可直接使用随包 Expert 默认 Profile；环境不匹配则先运行“实时演奏校准”，再在“设置 → 演出设置 → 实时演奏 Profile”确认。
 5. 选择任务、难度和次数后开始运行；需要提前结束时使用客户端停止按钮。
 
 普通用户无需安装 Python、Miniconda、.NET 或开发工具。程序入口为 `YesBanGDream.exe`，建议通过上述启动器完成便携环境准备、校验及旧诊断清理。便携环境支持中文、空格和深目录路径。
@@ -125,6 +128,17 @@ Expert / Special 建议使用 **5.0 或更高流速**，并按实际流速校准
 | 任务安全 | “不检查结果”、单局技术失败重试次数、其他程序占用检测与清理选项。 |
 
 高难度 Profile 可兼容较低难度，Expert 与 Special 属于同一兼容等级，环境和流速仍需匹配。单人、协力、挑战、自动演出及自由巡演请求 Special 时，只在该曲 Special 不可选的情况下显式回退 Expert；实时校准必须实际选中所选难度。实际 Special 的实时触控需要可信本地谱面及方向信息。
+
+### 随包 Expert 校准
+
+| 文件 | 引擎 | 匹配环境 | 时序偏移 |
+| --- | --- | --- | --- |
+| `expert-20260905233716.json` | Legacy | 1280×720、DPI 240、游戏 60 FPS、standard、流速 5.0 | 60 ms |
+| `expert-20261003194036.json` | Native | 同上 | 60 ms |
+
+新安装默认 Legacy，使用自动环境匹配；启用 Native 后可匹配 Native 文件。已有手动钉选会保留，切换引擎时请双击对应 Profile，或取消钉选后使用自动匹配。设置变化或实际表现不稳定时重新校准。
+
+完整包内置两份文件，更新器保留用户 `profiles/`，通过独立 `default-profiles/` 在启动时只补缺失 JSON，不覆盖同名校准、选择或运行选项。直接打开程序后，Profile 管理和 Agent 也会补齐。手动导入独立 ZIP 时只复制需要的校准 JSON，保留自己的 `selection.json`。
 
 ### 谱面与引擎
 
@@ -184,17 +198,17 @@ Expert / Special 建议使用 **5.0 或更高流速**，并按实际流速校准
 
 ## 验证状态与已知限制
 
-2.0.0 已发布到本仓库，完整包、更新包及 MFA 源码包已完成构建和结构校验。本地完整自动化结果为 **1922 passed / 12 skipped**；不包含本机私密录像和 Native 构建产物的公开源码验证为 **1705 passed / 229 skipped**。Windows PowerShell 5.1 下中文、空格和深目录的便携运行时首次准备已通过检查。
+2.0.1 提供完整包、更新包、定制 MFA 源码包及 Expert 默认校准 ZIP，各附 SHA256；自动化、构建和发布记录见 [验证状态](docs/validation-v2.0.1.md)。Windows PowerShell 5.1 下中文、空格和深目录的便携运行时首次准备已有检查覆盖。
 
-**本次迁移后的完整真实游戏验收尚未完成。** 发布和自动化通过不能代替设备验收，也不承诺全连或零失误。挑战点数阈值、多局计数、断网恢复、部分协力 Special 边界及组曲随机 / 多组流程仍需分别实测；上游验收记录不能直接视为本分支通过。
+**MuMu Native Expert 协力已完成五局验收。** 输入全部执行、触点释放正常，准备页误判没有复发；一次成员退出正常重入。前四首判定全部为 PERFECT，第五首数字未读出；第 1、5 首设备时序诊断超阈值，第 4 首记录 SLOW 182，录像有帧缺口。不承诺全连或零失误。挑战、团队、组曲和 Special 边界未新增完整实测。
 
 Native 核心及迁入的 ADB 端口归属校验、Native 等待成本抖动过滤、协力成员加载页保护均为测试 / 试验功能，默认关闭。MuMu 请继续使用 Legacy。多客户端同时运行或频繁切换配置存在已知 Avalonia 崩溃风险；避免与 ALAS 等其他自动化程序同时控制同一模拟器。
 
-详见 [验证状态](docs/validation-v2.0.0.md) 和 [上游迁移风险评估](docs/upstream-migration-v2.0.0.md)。
+详见 [验证状态](docs/validation-v2.0.1.md) 和 [上游迁移风险评估](docs/upstream-migration-v2.0.0.md)。
 
 ## 源码开发与构建
 
-项目 Agent / Pipeline 与桌面宿主分属两个源码目录；桌面部分需要本版本对应的定制 MFAAvalonia。优先使用 Release 附带的 `YesBanGDream-v2.0.0-MFA-source.zip` 获取对应桌面源码和重建说明。
+项目 Agent / Pipeline 与桌面宿主分属两个源码目录；桌面部分需要本版本对应的定制 MFAAvalonia。优先使用 Release 附带的 `YesBanGDream-v2.0.1-MFA-source.zip` 获取对应桌面源码和重建说明。
 
 ```text
 workspace/
@@ -217,7 +231,7 @@ workspace/
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\launch-mfa.ps1
 ```
 
-Windows 发布由 [build-windows-release.ps1](scripts/build-windows-release.ps1) 构建，版本参数使用 `2.0.0`；需要匹配的定制 MFA 源码、.NET SDK、Python 及 Native 构建工具。完整步骤和验证要求见 [发布流程](docs/release-yesbangdream.md) 与 [便携包说明](docs/release-package.md)。两个源码提交、运行库来源和品牌摘要记录在包内 `BUILD-INFO.json`。
+Windows 发布由 [build-windows-release.ps1](scripts/build-windows-release.ps1) 构建，版本参数使用 `2.0.1`；需要匹配的定制 MFA 源码、.NET SDK、Python 及 Native 构建工具。完整步骤和验证要求见 [发布流程](docs/release-yesbangdream.md) 与 [便携包说明](docs/release-package.md)。两个源码提交、运行库来源和品牌摘要记录在包内 `BUILD-INFO.json`。
 
 欢迎提交 [Issues](https://github.com/woshiyigeanniu/YesBanGDream/issues) 和 Pull Request。功能使用 `feature/*`、修复使用 `fix/*`，提交前运行验证并审查差异，通过 PR squash 合并；不要提交个人配置、设备信息、日志、录像或构建产物。详细约定见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
@@ -226,8 +240,8 @@ Windows 发布由 [build-windows-release.ps1](scripts/build-windows-release.ps1)
 | 文档 | 内容 |
 | --- | --- |
 | [CHANGELOG.md](CHANGELOG.md) | 版本改动与项目进度 |
-| [2.0.0 版本说明](docs/release-notes-v2.0.0.md) | 当前版本的主要变化 |
-| [验证状态](docs/validation-v2.0.0.md) / [迁移评估](docs/upstream-migration-v2.0.0.md) | 自动化、设备验收及迁移风险 |
+| [2.0.1 版本说明](docs/release-notes-v2.0.1.md) | 当前版本的主要变化 |
+| [验证状态](docs/validation-v2.0.1.md) / [迁移评估](docs/upstream-migration-v2.0.0.md) | 自动化、设备验收及迁移风险 |
 | [Windows 便携包说明](docs/release-package.md) / [发布流程](docs/release-yesbangdream.md) | 安装、更新、构建及源码交付 |
 | [Bestdori 谱面说明](docs/bestdori-chart-repository.md) | 数据格式、同步与身份匹配 |
 | [LICENSING.md](LICENSING.md) / [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) | 非商业许可范围和第三方权利 |
