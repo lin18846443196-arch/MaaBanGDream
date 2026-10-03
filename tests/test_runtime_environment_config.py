@@ -90,11 +90,11 @@ def test_launcher_patches_mfa_user_stop_status_race():
 
 def test_readme_displays_the_project_logo():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    logo = ROOT / "docs/assets/rhythmpilot-logo.png"
+    logo = ROOT / "docs/assets/yesbangdream-logo.png"
 
     assert logo.is_file()
-    assert 'src="docs/assets/rhythmpilot-logo.png"' in readme
-    assert 'alt="RhythmPilot Logo"' in readme
+    assert 'src="docs/assets/yesbangdream-logo.png"' in readme
+    assert 'alt="YesBanGDream Logo"' in readme
 
 
 def test_launcher_scopes_process_cleanup_authorization_to_one_mfa_session():

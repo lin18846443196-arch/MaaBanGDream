@@ -13,10 +13,10 @@ from pathlib import Path
 
 
 BRANDING_INPUTS = (
-    "packaging/RhythmPilot.targets",
-    "packaging/rhythmpilot.ico",
-    "docs/assets/rhythmpilot-logo.png",
-    "patches/rhythmpilot-mfa-branding.patch",
+    "packaging/YesBanGDream.targets",
+    "packaging/yesbangdream.ico",
+    "docs/assets/yesbangdream-logo.png",
+    "patches/yesbangdream-mfa-branding.patch",
 )
 MFA_INPUTS = (
     "LICENSE",
@@ -47,7 +47,7 @@ def export_source(package_root: Path, project_root: Path, mfa_root: Path) -> Pat
         raise ValueError("invalid source archive version")
     if clean_commit(project_root) != info["maa_commit"] or clean_commit(mfa_root) != info["mfa_commit"]:
         raise ValueError("source commits differ from the package BUILD-INFO")
-    name = f"RhythmPilot-v{version}-MFA-source"
+    name = f"YesBanGDream-v{version}-MFA-source"
     destination = package_root.parent / f"{name}.zip"
     temporary = destination.with_suffix(".zip.tmp")
     try:
@@ -70,10 +70,10 @@ def export_source(package_root: Path, project_root: Path, mfa_root: Path) -> Pat
                             target.compress_type = zipfile.ZIP_DEFLATED
                             output.writestr(target, source.read(entry))
                 output.writestr(f"{name}/SOURCE-INFO.json", json.dumps(info, ensure_ascii=False, indent=2) + "\n")
-                output.writestr(f"{name}/README.md", """# RhythmPilot desktop corresponding source
+                output.writestr(f"{name}/README.md", """# YesBanGDream desktop corresponding source
 
 MFAAvalonia/ contains the complete committed desktop and updater source, including
-the RhythmPilot changes. Its GPL-3.0 license is in MFAAvalonia/LICENSE.
+the YesBanGDream changes. Its GPL-3.0 license is in MFAAvalonia/LICENSE.
 SOURCE-INFO.json identifies the exact commits used by the matching binary package.
 build-inputs/ contains the icon, artwork, MSBuild targets and reconstruction patch.
 Agent sources and release scripts are maintained independently at:
@@ -83,8 +83,8 @@ To rebuild the desktop on Windows, install .NET SDK 10 and run from this directo
 
 ```powershell
 $brand = (Resolve-Path build-inputs/packaging).Path
-$targets = Join-Path $brand 'RhythmPilot.targets'
-dotnet publish MFAAvalonia/MFAAvalonia.Desktop/MFAAvalonia.Desktop.csproj -c Release -r win-x64 --self-contained true -p:MaaBanGDreamPackageBuild=true "-p:RhythmPilotBrandRoot=$brand" "-p:CustomAfterMicrosoftCommonTargets=$targets" -o output/desktop
+$targets = Join-Path $brand 'YesBanGDream.targets'
+dotnet publish MFAAvalonia/MFAAvalonia.Desktop/MFAAvalonia.Desktop.csproj -c Release -r win-x64 --self-contained true -p:MaaBanGDreamPackageBuild=true "-p:YesBanGDreamBrandRoot=$brand" "-p:CustomAfterMicrosoftCommonTargets=$targets" -o output/desktop
 dotnet publish MFAAvalonia/MFAUpdater/MFAUpdater.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=true -p:TrimMode=link "-p:CustomAfterMicrosoftCommonTargets=$targets" -o output/updater
 ```
 
@@ -104,7 +104,7 @@ The branding patch is already applied; do not apply it again to this source tree
 
 def verify_source(package_root: Path) -> Path:
     info = json.loads((package_root / "BUILD-INFO.json").read_text(encoding="utf-8-sig"))
-    name = f"RhythmPilot-v{info['version']}-MFA-source"
+    name = f"YesBanGDream-v{info['version']}-MFA-source"
     path = package_root.parent / f"{name}.zip"
     expected = Path(f"{path}.sha256").read_text(encoding="utf-8").split()[0]
     with path.open("rb") as stream:
@@ -119,8 +119,8 @@ def verify_source(package_root: Path) -> Path:
         for relative in MFA_INPUTS:
             archive.getinfo(f"{name}/MFAAvalonia/{relative}")
         for relative, field in (
-            ("packaging/RhythmPilot.targets", "branding_targets_sha256"),
-            ("patches/rhythmpilot-mfa-branding.patch", "mfa_branding_patch_sha256"),
+            ("packaging/YesBanGDream.targets", "branding_targets_sha256"),
+            ("patches/yesbangdream-mfa-branding.patch", "mfa_branding_patch_sha256"),
         ):
             if hashlib.sha256(archive.read(f"{name}/build-inputs/{relative}")).hexdigest() != info[field]:
                 raise ValueError("MFA source branding inputs differ from the binary build")

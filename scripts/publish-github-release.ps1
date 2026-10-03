@@ -43,7 +43,7 @@ foreach ($suffix in @('.zip', '-update.zip')) {
     }
     $assets += @($archive, $checksum)
 }
-$mfaSourceArchive = Join-Path (Split-Path -Parent $PackageRoot) "RhythmPilot-v$version-MFA-source.zip"
+$mfaSourceArchive = Join-Path (Split-Path -Parent $PackageRoot) "YesBanGDream-v$version-MFA-source.zip"
 $assets += @($mfaSourceArchive, "$mfaSourceArchive.sha256")
 & $GitHubCli auth status --hostname github.com
 if ($LASTEXITCODE -ne 0) { throw 'GitHub login is required; no release has been created.' }
@@ -60,7 +60,7 @@ $tagCommit = (($remoteTag[0] -split '\s+')[0])
 if ($peeledTag.Count -gt 0) { $tagCommit = (($peeledTag[0] -split '\s+')[0]) }
 if ($tagCommit -ne $head) { throw 'The remote release tag differs from the package source commit.' }
 $releaseArguments = @('release', 'create', $tag, '--repo', $repository, '--verify-tag',
-    '--title', "RhythmPilot $tag", '--notes-file', $notes)
+    '--title', "YesBanGDream $tag", '--notes-file', $notes)
 if (-not $Publish) { $releaseArguments += @('--draft', '--prerelease') }
 & $GitHubCli @releaseArguments @assets
 if ($LASTEXITCODE -ne 0) { throw 'GitHub release creation failed; inspect the remote before retrying.' }

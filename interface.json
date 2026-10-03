@@ -1,11 +1,11 @@
 {
   "$schema": "https://raw.githubusercontent.com/MaaXYZ/MaaFramework/main/tools/interface.schema.json",
   "interface_version": 2,
-  "name": "RhythmPilot",
-  "label": "RhythmPilot · BanG Dream! 自动化",
-  "version": "1.5.0",
+  "name": "YesBanGDream",
+  "label": "YesBanGDream · BanG Dream! 自动化",
+  "version": "2.0.0",
   "description": "docs/about.md",
-  "about_icon": "docs/assets/rhythmpilot-logo.png",
+  "about_icon": "docs/assets/yesbangdream-logo.png",
   "contact": "docs/contact.md",
   "welcome": "https://raw.githubusercontent.com/lin18846443196-arch/MaaBanGDream/main/docs/announcement.md",
   "license": "PolyForm-Noncommercial-1.0.0",
@@ -2583,5 +2583,5 @@
       ]
     }
   },
-  "icon": "docs/assets/rhythmpilot-logo.png"
+  "icon": "docs/assets/yesbangdream-logo.png"
 }

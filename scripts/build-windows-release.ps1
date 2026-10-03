@@ -64,8 +64,8 @@ foreach ($required in @(
     $mfaLicense,
     $performanceSettings,
     $versionChecker,
-    (Join-Path $projectRoot 'packaging\RhythmPilot.targets'),
-    (Join-Path $projectRoot 'packaging\rhythmpilot.ico'),
+    (Join-Path $projectRoot 'packaging\YesBanGDream.targets'),
+    (Join-Path $projectRoot 'packaging\yesbangdream.ico'),
     (Join-Path $projectRoot 'packaging\start-maabangdream.cmd'),
     (Join-Path $projectRoot 'docs\release-package.md'),
     (Join-Path $projectRoot $releaseNotesRelativePath),
@@ -89,8 +89,8 @@ if (-not (Select-String `
     -Quiet)) {
     throw 'MFA source is missing the MaaBanGDream Mirror update guard.'
 }
-if (-not (Select-String -LiteralPath $versionChecker -SimpleMatch '"RhythmPilot"' -Quiet)) {
-    throw 'Apply and commit the RhythmPilot MFA branding patch in the isolated MFA source checkout first.'
+if (-not (Select-String -LiteralPath $versionChecker -SimpleMatch '"YesBanGDream"' -Quiet)) {
+    throw 'Apply and commit the YesBanGDream MFA branding patch in the isolated MFA source checkout first.'
 }
 
 if (-not $AllowDirty) {
@@ -109,7 +109,7 @@ if (-not $AllowDirty) {
 }
 
 $outputFull = [System.IO.Path]::GetFullPath($OutputDirectory)
-$packageName = "RhythmPilot-v$Version-win-x64"
+$packageName = "YesBanGDream-v$Version-win-x64"
 $packageRoot = [System.IO.Path]::GetFullPath(
     (Join-Path $outputFull $packageName)
 )
@@ -133,13 +133,13 @@ dotnet publish $mfaProject `
     -r win-x64 `
     --self-contained true `
     -p:MaaBanGDreamPackageBuild=true `
-    "-p:RhythmPilotBrandRoot=$(Join-Path $projectRoot 'packaging')" `
-    "-p:CustomAfterMicrosoftCommonTargets=$(Join-Path $projectRoot 'packaging\RhythmPilot.targets')" `
+    "-p:YesBanGDreamBrandRoot=$(Join-Path $projectRoot 'packaging')" `
+    "-p:CustomAfterMicrosoftCommonTargets=$(Join-Path $projectRoot 'packaging\YesBanGDream.targets')" `
     -o $packageRoot
 if ($LASTEXITCODE -ne 0) {
     throw 'Customized MFAAvalonia publish failed.'
 }
-foreach ($hostFile in @('RhythmPilot.exe', 'RhythmPilot.dll', 'RhythmPilot.deps.json', 'RhythmPilot.runtimeconfig.json')) {
+foreach ($hostFile in @('YesBanGDream.exe', 'YesBanGDream.dll', 'YesBanGDream.deps.json', 'YesBanGDream.runtimeconfig.json')) {
     if (-not (Test-Path -LiteralPath (Join-Path $packageRoot $hostFile) -PathType Leaf)) {
         throw "Branded desktop host is missing: $hostFile"
     }
@@ -163,7 +163,7 @@ dotnet publish $mfaUpdaterProject `
     -p:PublishSingleFile=true `
     -p:PublishTrimmed=true `
     -p:TrimMode=link `
-    "-p:CustomAfterMicrosoftCommonTargets=$(Join-Path $projectRoot 'packaging\RhythmPilot.targets')" `
+    "-p:CustomAfterMicrosoftCommonTargets=$(Join-Path $projectRoot 'packaging\YesBanGDream.targets')" `
     -o $updaterPublishDirectory
 if ($LASTEXITCODE -ne 0) {
     throw 'MFAUpdater self-contained publish failed.'
@@ -226,7 +226,7 @@ foreach ($relativePath in @(
     'docs\about.md',
     'docs\contact.md',
     'docs\announcement.md',
-    'docs\assets\rhythmpilot-logo.png',
+    'docs\assets\yesbangdream-logo.png',
     'requirements.txt',
     'runtime-compatibility.json',
     'scripts\start-release.ps1',
@@ -246,7 +246,7 @@ Copy-ProjectFile `
 Copy-ProjectFile -RelativePath 'interface.json'
 Copy-ProjectFile `
     -RelativePath 'packaging\start-maabangdream.cmd' `
-    -DestinationRelativePath '启动 RhythmPilot.cmd'
+    -DestinationRelativePath '启动 YesBanGDream.cmd'
 Copy-ProjectFile `
     -RelativePath 'docs\release-package.md' `
     -DestinationRelativePath 'README.md'
@@ -344,20 +344,20 @@ $buildInfo = [ordered]@{
     upstream_repository = 'https://github.com/coatcn1/MaaBanGDream'
     upstream_baseline = 'v1.4.3'
     upstream_synced = 'v1.4.5'
-    desktop_brand = 'RhythmPilot'
+    desktop_brand = 'YesBanGDream'
     maa_commit = $maaCommit
     mfa_repository = 'https://github.com/coatcn1/MFAAvalonia'
     mfa_branch = $mfaBranch
     mfa_commit = $mfaCommit
-    mfa_source_asset = "RhythmPilot-v$Version-MFA-source.zip"
+    mfa_source_asset = "YesBanGDream-v$Version-MFA-source.zip"
     mfaavalonia = '2.12.0-custom'
     maafw = '5.10.2'
     python = '3.12'
     python_runtime = 'conda-pack'
     dotnet_runtime = 'self-contained'
-    branding_targets_sha256 = (Get-FileHash -LiteralPath (Join-Path $projectRoot 'packaging\RhythmPilot.targets') -Algorithm SHA256).Hash.ToLowerInvariant()
+    branding_targets_sha256 = (Get-FileHash -LiteralPath (Join-Path $projectRoot 'packaging\YesBanGDream.targets') -Algorithm SHA256).Hash.ToLowerInvariant()
     mfa_upstream_commit = 'a39dcd87ba2e5098ee23072e9a015c5c36f8c8d1'
-    mfa_branding_patch_sha256 = (Get-FileHash -LiteralPath (Join-Path $projectRoot 'patches\rhythmpilot-mfa-branding.patch') -Algorithm SHA256).Hash.ToLowerInvariant()
+    mfa_branding_patch_sha256 = (Get-FileHash -LiteralPath (Join-Path $projectRoot 'patches\yesbangdream-mfa-branding.patch') -Algorithm SHA256).Hash.ToLowerInvariant()
     native_extension_source = $(if ($NativeExtension) { 'verified-upstream-v1.4.5-binary' } else { 'built-from-source' })
     native_extension_sha256 = (Get-FileHash -LiteralPath (Join-Path $packageRoot 'agent\realtime\native\maabangdream_realtime.pyd') -Algorithm SHA256).Hash.ToLowerInvariant()
     python_archive_source = $(if ($RuntimeArchive) { 'verified-upstream-v1.4.5-runtime' } else { 'neutral-conda-pack-build' })
@@ -466,5 +466,5 @@ $updateZipHash = (Get-FileHash -LiteralPath $updateZipPath -Algorithm SHA256).Ha
     UpdateZip = $updateZipPath
     UpdateSha256 = $updateZipHash
     UpdateBytes = (Get-Item -LiteralPath $updateZipPath).Length
-    MfaSourceZip = $(if (-not $AllowDirty) { Join-Path $outputFull "RhythmPilot-v$Version-MFA-source.zip" })
+    MfaSourceZip = $(if (-not $AllowDirty) { Join-Path $outputFull "YesBanGDream-v$Version-MFA-source.zip" })
 }

@@ -132,7 +132,7 @@ def expected_versions(
 
 
 def mfa_versions(mfa_root: Path) -> dict[str, str]:
-    deps_candidates = (mfa_root / "RhythmPilot.deps.json", mfa_root / "MaaBanGDream.deps.json", mfa_root / "MFAAvalonia.deps.json")
+    deps_candidates = (mfa_root / "YesBanGDream.deps.json", mfa_root / "MaaBanGDream.deps.json", mfa_root / "MFAAvalonia.deps.json")
     deps_path = next((path for path in deps_candidates if path.is_file()), None)
     if deps_path is None:
         raise FileNotFoundError(f"missing desktop host dependency file: {deps_candidates}")

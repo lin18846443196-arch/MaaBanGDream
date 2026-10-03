@@ -1,4 +1,4 @@
-# RhythmPilot 1.5.0 验证状态
+# YesBanGDream 2.0.0 验证状态
 
 完整自动化验证：固定运行时检查与完整测试为 **1922 passed / 12 skipped**，
 `git diff --check` 通过。
@@ -19,7 +19,7 @@
   229 skipped**。该目录不含私密录像与 Native 构建产物，因此相关回放/扩展测试
   明确跳过。含本地证据和经验证扩展的源码验证为 1922 passed / 12 skipped。
   跳过项不是成功的设备验收。
-- 构建：RhythmPilot 程序与独立更新器已构建；完整/更新 ZIP 结构和校验检查通过，
+- 构建：YesBanGDream 程序与独立更新器已构建；完整/更新 ZIP 结构和校验检查通过，
   最终候选包含长路径修复。构建提交与摘要见各包的 BUILD-INFO.json 和 SHA256 文件。
 - 便携环境：Windows PowerShell 5.1 下的中文、空格、深目录首次准备通过，
   Python/MaaFw/Core/MFA/Binding 版本检查通过；全程使用独立候选目录。

@@ -34,13 +34,13 @@ def sources(tmp_path):
     project = tmp_path / "project"
     mfa = tmp_path / "mfa"
     info = {
-        "version": "1.5.0",
+        "version": "2.0.0",
         "maa_commit": repository(project, BRANDING_INPUTS),
         "mfa_commit": repository(mfa, MFA_INPUTS),
         "branding_targets_sha256": hashlib.sha256(BRANDING_INPUTS[0].encode()).hexdigest(),
         "mfa_branding_patch_sha256": hashlib.sha256(BRANDING_INPUTS[3].encode()).hexdigest(),
     }
-    package = tmp_path / "release" / "RhythmPilot-v1.5.0-win-x64"
+    package = tmp_path / "release" / "YesBanGDream-v2.0.0-win-x64"
     package.mkdir(parents=True)
     (package / "BUILD-INFO.json").write_text(json.dumps(info), encoding="utf-8")
     return package, project, mfa, info
@@ -53,7 +53,7 @@ def test_corresponding_source_includes_committed_inputs_and_excludes_local_artif
         (root / "bin" / "private.txt").write_text("private", encoding="utf-8")
     path = export_source(package, project, mfa)
     assert verify_source(package) == path
-    prefix = "RhythmPilot-v1.5.0-MFA-source/"
+    prefix = "YesBanGDream-v2.0.0-MFA-source/"
     with zipfile.ZipFile(path) as archive:
         assert not any("private" in name or "/.git/" in name for name in archive.namelist())
         assert archive.read(f"{prefix}MFAAvalonia/{MFA_INPUTS[1]}") == MFA_INPUTS[1].encode()
