@@ -256,6 +256,13 @@
     "recognition": "DirectHit",
     "action": "DoNothing"
   },
+  "CooperativeStartupRefreshScreen": {
+    "recognition": "DirectHit",
+    "action": "DoNothing",
+    "pre_delay": 0,
+    "post_delay": 0,
+    "rate_limit": 0
+  },
   "ResultRefreshScreen": {
     "recognition": "DirectHit",
     "action": "DoNothing",

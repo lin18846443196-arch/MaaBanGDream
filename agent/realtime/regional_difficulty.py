@@ -20,6 +20,17 @@ class VerifiedRegionalDifficulty:
 
 
 _VERIFIED_CN_EXPERT_LEVELS = (
+    # 2026-09-28 原始准备页与结算均为独創収差 EXPERT Lv.27；
+    # 905 个判定与此前执行的同一 SHA 谱面一致，全局元数据为 28。
+    VerifiedRegionalDifficulty(
+        bestdori_song_id=442,
+        difficulty="expert",
+        cn_level=27,
+        source_level=28,
+        chart_sha256=(
+            "d51ae11b4602098c94302cedd06bfeb6d145ba0bce39aae9dd24e6538413ec82"
+        ),
+    ),
     VerifiedRegionalDifficulty(
         bestdori_song_id=581,
         difficulty="expert",
@@ -27,6 +38,15 @@ _VERIFIED_CN_EXPERT_LEVELS = (
         source_level=26,
         chart_sha256=(
             "1f265d0a59a144d9534468391b43ebfd10838ff354c0851d48be68ed452fcbff"
+        ),
+    ),
+    VerifiedRegionalDifficulty(
+        bestdori_song_id=590,
+        difficulty="expert",
+        cn_level=27,
+        source_level=26,
+        chart_sha256=(
+            "329052dd5eeb691a7d90f304a832d3a50777858e2e2858ec2684a9c4ce85080b"
         ),
     ),
     VerifiedRegionalDifficulty(

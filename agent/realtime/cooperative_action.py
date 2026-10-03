@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 import traceback
 from collections.abc import Callable
+from collections import deque
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,14 +20,16 @@ from maa.custom_action import CustomAction
 
 try:
     from ..common_recover import CommonRecover
+    from ..capture_transition import wait_for_game_capture_ready
     from ..foreground_guard import GAME_PACKAGE, foreground_package, require_game_foreground
     from ..screen_refresh import ScreenRefreshCancelled, capture_image
-    from ..task_reporting import TaskProgress, record_failure_reason
+    from ..task_reporting import TaskProgress, latest_failure_reason, record_failure_reason
 except ImportError:
     from common_recover import CommonRecover
+    from capture_transition import wait_for_game_capture_ready
     from foreground_guard import GAME_PACKAGE, foreground_package, require_game_foreground
     from screen_refresh import ScreenRefreshCancelled, capture_image
-    from task_reporting import TaskProgress, record_failure_reason
+    from task_reporting import TaskProgress, latest_failure_reason, record_failure_reason
 
 from .difficulty_action import RealtimeDifficultySelect
 from .game_effect_settings_action import _click as _maa_click
@@ -50,9 +55,11 @@ from .profile_store import (
 from .rehearsal_action import frame_resolution
 from .native_prearm import discard_prearmed_backend
 from .cooperative_network import GameNetworkGate
+from .adb_root import enable_adb_root
 from .result_navigation import (
     RESULT_ANIMATION_SKIP_POINT,
     accelerated_back,
+    advance_result_cadence,
     handle_story_page,
 )
 
@@ -76,11 +83,17 @@ TEMPLATE_POSITIONS = {
     "ready_button": (1010, 575),
     "member_exit_title": (399, 158),
     "connect_failed_body": (580, 345),
+    "connect_failed_retry": (660, 500),
     "repeat_room_title": (393, 225),
     "sss_guide_close": (856, 610),
+    "result_replay": (707, 618),
+    "result_confirm": (959, 618),
     # 断网跳车：真实弹窗正文（2026-09-07 雷电录像提取）。
     "disconnect_continue_body": (488, 313),
     "disconnect_confirm_body": (495, 307),
+    "disconnect_confirm_body_current": (475, 298),
+    "restriction_body": (300, 257),
+    "restriction_ok": (527, 460),
 }
 
 DEFAULT_SETTINGS: dict[str, object] = {
@@ -124,6 +137,16 @@ DISCONNECT_CONFIRM_INTERRUPT_POINT = (754, 439)
 READY_DELIVERY_OBSERVE_SECONDS = 2.0
 
 
+@dataclass
+class ConnectRetryState:
+    """A navigation-wide budget, including dialogs that disappear and recur."""
+
+    limit: int = 5
+    clicks: int = 0
+    next_click_at: float = 0.0
+    unclickable_since: float | None = None
+
+
 def _frame_is_black_transition(image: np.ndarray) -> bool:
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     return float(gray.mean()) < 6.0 and float(gray.std()) < 6.0
@@ -133,8 +156,8 @@ class CooperativePlayfieldEntryEvidence:
     """为准备后漏黑场保留的有界演奏场动态证据。
 
     PlayfieldDetector 的生命条和白色判定线在准备页也可能同时出现，不能单独
-    放行。这里仅观察判定线上方的音符区域：要求连续两帧出现局部列变化，并
-    拒绝覆盖大面积列的转场/变暗。它只决定成员退出监听何时结束，不参与
+    放行。这里要求真实音符头、连续两帧局部列变化，并排除成员准备弹窗及
+    大面积转场/变暗。它只决定成员退出监听何时结束，不参与
     Native 首音锚点、scheduler 或任何歌曲时间计算。
     """
 
@@ -147,6 +170,11 @@ class CooperativePlayfieldEntryEvidence:
     _REQUIRED_NARROW_EVENTS = 2
 
     def __init__(self) -> None:
+        from .first_note_evidence import has_approaching_note_head
+        from .prepare_popup import CooperativePreparePopupDetector
+
+        self._note_head_detector = has_approaching_note_head
+        self._prepare_popup_detector = CooperativePreparePopupDetector(verify_content=True)
         self._previous_columns: np.ndarray | None = None
         self._narrow_motion_streak = 0
 
@@ -165,6 +193,12 @@ class CooperativePlayfieldEntryEvidence:
             or image.shape[0] < 2
             or image.shape[1] < 2
         ):
+            self.reset()
+            return False
+        if self._prepare_popup_detector(image) or not self._note_head_detector(image):
+            # Stage lighting can produce consecutive narrow changes too.
+            # Retain only motion observed while an actual note head is visible;
+            # this is exit evidence, never permission to anchor mid-song.
             self.reset()
             return False
         height = image.shape[0]
@@ -230,6 +264,10 @@ class MemberExited(RuntimeError):
 
 class JumpOutUnavailable(RuntimeError):
     """协力局已安全跳车或无法继续自动恢复，应立即结束任务。"""
+
+
+class CooperativeStartupRetry(RuntimeError):
+    """An invalid startup was exited safely; retry through the bounded loop."""
 
 
 def configure_cooperative_settings(params: dict[str, object]) -> dict[str, object]:
@@ -372,6 +410,20 @@ class CooperativeLiveFlow:
         except ScreenRefreshCancelled as exc:
             raise InterruptedError("用户已停止任务") from exc
 
+    def capture_startup(self) -> np.ndarray:
+        """Capture short loading transitions without the normal 1.2s delays.
+
+        Keep the callback-safe pipeline/cached-image path. Direct reverse
+        post_screencap calls can hang this SDK; a dedicated node removes only
+        the startup waits, preserving normal navigation timing elsewhere.
+        """
+        if self.stopped():
+            raise InterruptedError("用户已停止任务")
+        try:
+            return capture_image(self.context, node="CooperativeStartupRefreshScreen")
+        except ScreenRefreshCancelled as exc:
+            raise InterruptedError("用户已停止任务") from exc
+
     def template_box(
         self,
         image: np.ndarray,
@@ -450,42 +502,131 @@ class CooperativeLiveFlow:
             self.click((638, 525))
             time.sleep(0.8)
 
-    def dismiss_connect_failed(self, attempts: int = 5) -> bool:
-        """“连接失败”弹窗：有界点击“重试”，直到弹窗消失或尝试耗尽。"""
-        for _ in range(max(1, int(attempts))):
-            image = self.capture()
-            if not self.visible(image, "connect_failed_body", 0.90):
+    def _save_navigation_evidence(
+        self, image: np.ndarray, phase: str, status: str, **details,
+    ) -> None:
+        """Keep recovery evidence with the song even after its video closes."""
+        try:
+            run = current_live_run()
+            if run is None or not run.recording_path:
+                return
+            directory = Path(run.recording_path)
+            if not directory.is_absolute():
+                directory = PROJECT_ROOT / directory
+            output = directory / "navigation" / (
+                f"{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}-{phase}-{status}.png"
+            )
+            output.parent.mkdir(parents=True, exist_ok=True)
+            if imwrite_unicode(output, image):
+                details["screenshot"] = str(output.relative_to(directory))
+            append_current_run_event(PROJECT_ROOT, phase, status, details=details)
+        except Exception as exc:
+            print(f"CooperativeLive navigation_evidence_failed={exc}", flush=True)
+
+    def handle_connect_failed(
+        self, image: np.ndarray, state: ConnectRetryState, *, phase: str,
+    ) -> bool:
+        """Handle the foreground modal before inspecting any page behind it."""
+        if self.stopped():
+            raise InterruptedError("用户已停止任务")
+        if self.template_box(image, "connect_failed_body", 0.90) is None:
+            state.unclickable_since = None
+            return False
+        retry = self.template_box(image, "connect_failed_retry", 0.90)
+        if retry is not None:
+            x, y, width, height = retry
+            button = image[y:y + height, x:x + width, :3]
+            if float(np.median(cv2.cvtColor(button, cv2.COLOR_BGR2HSV)[:, :, 2])) < 220:
+                retry = None
+        if retry is None:
+            now = time.monotonic()
+            if state.unclickable_since is None:
+                state.unclickable_since = now
+                self._save_navigation_evidence(image, phase, "connect-retry-unrecognized")
+            # Modal text can become recognizable before the footer finishes
+            # fading in. Observe briefly without accepting the Home behind it.
+            if now - state.unclickable_since < 2.0:
                 return True
-            self.click((748, 527))
-            time.sleep(0.8)
-        return not self.visible(
-            self.capture(), "connect_failed_body", 0.90
+            raise RuntimeError("游戏连接失败，但未确认可点击的重试按钮，已停止本次导航")
+        state.unclickable_since = None
+        if time.monotonic() < state.next_click_at:
+            return True
+        if state.clicks >= state.limit:
+            self._save_navigation_evidence(
+                image, phase, "connect-retry-exhausted", attempts=state.clicks,
+            )
+            raise RuntimeError(f"游戏连接失败，重试{state.limit}次后仍未恢复，已停止本次导航")
+        self._save_navigation_evidence(
+            image, phase, "connect-retry", attempt=state.clicks + 1,
         )
+        self.click((x + width // 2, y + height // 2))
+        state.clicks += 1
+        state.next_click_at = time.monotonic() + 1.0
+        print(
+            f"CooperativeLive phase={phase} action=connect-retry "
+            f"attempt={state.clicks}/{state.limit}", flush=True,
+        )
+        return True
+
+    def dismiss_connect_failed(self, attempts: int = 5) -> bool:
+        """Retry only a confirmed connection dialog and verify its disappearance."""
+        state = ConnectRetryState(limit=max(1, min(5, int(attempts))))
+        deadline = time.monotonic() + state.limit * 2.0 + 2.0
+        while time.monotonic() < deadline:
+            image = self.capture()
+            try:
+                if not self.handle_connect_failed(image, state, phase="escape-reconnect"):
+                    return True
+            except RuntimeError as exc:
+                print(f"CooperativeDisconnectJump connect_retry_failed={exc}", flush=True)
+                return False
+            time.sleep(.2)
+        self._save_navigation_evidence(image, "escape-reconnect", "timeout")
+        return False
 
     def _adb_shell(self, args) -> tuple[int, str]:
-        """把 MaaFramework 控制器 shell 通道适配成 (returncode, output)。"""
-        command = " ".join(str(part) for part in args)
-        try:
-            output = self.controller.post_shell(command, 8000).wait().get()
-            return 0, str(output or "")
-        except Exception as exc:  # noqa: BLE001 - 任何失败都要 fail-closed
-            return -1, str(exc)
+        # Shared, tested adapter supplies missing SDK signatures and reads the
+        # actual process exit code; nonempty shell output is not success.
+        from .team_recovery import maa_shell
+        return maa_shell(lambda: self.controller, args)
+
+    def _escape_popup_visible(self, image: np.ndarray, name: str) -> bool:
+        variants = (name,)
+        if name == "disconnect_confirm_body":
+            variants += ("disconnect_confirm_body_current",)
+        return any(
+            variant in self.templates and self.visible(image, variant, 0.93)
+            for variant in variants
+        )
 
     def _wait_and_click(
         self,
         name: str,
         point: tuple[int, int],
         timeout: float,
+        *,
+        next_name: str | None = None,
+        confirm_disappeared: bool = False,
     ) -> bool:
-        """有界等待模板出现并点击一次；超时或停止时失败。"""
+        """Only retry a recognized dialog; confirm the requested transition."""
         deadline = time.monotonic() + float(timeout)
+        next_click = 0.0
+        clicks = 0
         while time.monotonic() < deadline:
             if self.stopped():
                 raise InterruptedError("用户已停止任务")
             image = self.capture()
-            if self.visible(image, name, 0.93):
-                self.click(point)
+            if next_name and self._escape_popup_visible(image, next_name):
                 return True
+            visible = self._escape_popup_visible(image, name)
+            if clicks and confirm_disappeared and not visible:
+                return True
+            if visible and clicks < 3 and time.monotonic() >= next_click:
+                self.click(point)
+                clicks += 1
+                next_click = time.monotonic() + 1.0
+                if not next_name and not confirm_disappeared:
+                    return True
             time.sleep(0.35)
         return False
 
@@ -498,8 +639,11 @@ class CooperativeLiveFlow:
         “连接失败。”弹窗有界点“重试”直到回主页。任何一步失败都在 finally
         恢复网络（fail-closed），绝不把模拟器留在断网状态。
         """
-        gate = GameNetworkGate(self._adb_shell)
+        import uuid
+        gate = GameNetworkGate(self._adb_shell, chain_suffix="mbdr_coop_" + uuid.uuid4().hex[:8])
         try:
+            if self.stopped():
+                raise InterruptedError("用户已停止任务")
             required = {
                 "disconnect_continue_body",
                 "disconnect_confirm_body",
@@ -522,10 +666,12 @@ class CooperativeLiveFlow:
             self.controller.post_click_key(3).wait()
             time.sleep(0.6)
             self.controller.post_start_app(GAME_PACKAGE).wait()
+            wait_for_game_capture_ready(self.context)
             if not self._wait_and_click(
                 "disconnect_continue_body",
                 DISCONNECT_CONTINUE_INTERRUPT_POINT,
                 popup_timeout_s,
+                next_name="disconnect_confirm_body",
             ):
                 print(
                     "CooperativeDisconnectJump continue_popup_missed=true",
@@ -536,6 +682,7 @@ class CooperativeLiveFlow:
                 "disconnect_confirm_body",
                 DISCONNECT_CONFIRM_INTERRUPT_POINT,
                 10.0,
+                confirm_disappeared=True,
             ):
                 print(
                     "CooperativeDisconnectJump confirm_popup_missed=true",
@@ -551,11 +698,22 @@ class CooperativeLiveFlow:
                 )
                 return False
             time.sleep(0.8)
-            self.dismiss_connect_failed()
+            if not self.dismiss_connect_failed():
+                print("CooperativeDisconnectJump connect_retry_exhausted=true", flush=True)
+                return False
             print("CooperativeDisconnectJump completed=true", flush=True)
             return True
         finally:
-            gate.restore()
+            restored = False
+            for _ in range(3):
+                try:
+                    restored = gate.restore()
+                except Exception as exc:
+                    print(f"CooperativeDisconnectJump restore_error={exc}", flush=True)
+                if restored:
+                    break
+            if not restored:
+                raise JumpOutUnavailable("游戏网络恢复未确认，已停止自动重试，请检查模拟器网络")
 
     def ensure_room_page(self, timeout: float = 15.0) -> np.ndarray:
         state, image = self.wait_for(("room_search",), timeout=timeout)
@@ -716,7 +874,56 @@ class CooperativeLiveFlow:
         self.click((767, 474))
         self.verify_room_entry("私人房间号无效、房间已关闭或未能进入房间")
 
+    def check_escape_available(self) -> GameNetworkGate | None:
+        if bool(self.settings.get("disconnect_jump_enabled", False)):
+            if self.stopped():
+                raise InterruptedError("用户已停止任务")
+            gate = GameNetworkGate(self._adb_shell)
+            available = gate.check_available()
+            root_failure = None
+            if not available and gate.root_access_available is False:
+                # MuMu can expose root through adbd without installing su.
+                # Acquire it before joining, when no song inputs are armed.
+                discard_prearmed_backend("cooperative-adb-root")
+                print(
+                    "[任务][协力演出][断网逃生][INFO] "
+                    "当前 ADB 没有 root，正在自动启用并等待连接恢复", flush=True,
+                )
+                enabled, detail = enable_adb_root(
+                    self.controller, stopping=self.stopped,
+                )
+                if enabled:
+                    if self.stopped():
+                        raise InterruptedError("用户已停止任务")
+                    # adbd restart closes Maa's existing minitouch pipe.
+                    # Reconnect before any navigation or Native prearming.
+                    connection = self.controller.post_connection().wait()
+                    if not connection.succeeded:
+                        raise JumpOutUnavailable(
+                            "ADB root 已启用，但 Maa 截图/触控连接恢复失败"
+                        )
+                    # The first gate cached a non-root shell. Verify the new
+                    # permission through Maa's current controller as well.
+                    gate = GameNetworkGate(self._adb_shell)
+                    available = gate.check_available()
+                else:
+                    root_failure = detail
+            if not available:
+                raise JumpOutUnavailable(
+                    "已开启断网逃生，但进房前检查失败，停止本次协力："
+                    f"{root_failure or gate.last_error}"
+                )
+            print(
+                "[任务][协力演出][断网逃生][INFO] "
+                "进房前已确认 root、防火墙和游戏 UID 匹配可用", flush=True,
+            )
+            return gate
+        return None
+
     def enter_room(self) -> None:
+        self.check_escape_available()
+        # The first entry can also encounter a restriction left by a prior run.
+        self.navigate_to_cooperative_room_selection("entry")
         method = str(self.settings["entry_method"])
         if method == "normal":
             self.select_normal_room()
@@ -828,6 +1035,10 @@ class CooperativeLiveFlow:
         ready_image = self.ensure_performance_mode_off(
             initial_image=initial_image,
         )
+        if isinstance(ready_image, np.ndarray):
+            # Retain the selected difficulty/level before loading replaces it.
+            # The recorder is created after ready, often on a black frame.
+            update_live_run(preparation_identity_image=ready_image.copy())
         ready_transition = self.ready_up_and_verify(initial_image=ready_image)
         if ready_transition != "black":
             self.watch_member_exit_before_black()
@@ -902,6 +1113,7 @@ class CooperativeLiveFlow:
         initial_image: np.ndarray | None = None,
     ) -> str:
         """点击“准备完毕”并确认按钮消失，防止触控未送达造成空演奏。"""
+        self._ready_delivery_image = None
         image = initial_image
         for attempt in range(3):
             if self.stopped():
@@ -952,7 +1164,7 @@ class CooperativeLiveFlow:
         while time.monotonic() < deadline:
             if self.stopped():
                 raise InterruptedError("用户已停止任务")
-            image = self.capture()
+            image = self.capture_startup()
             if self.visible(image, "member_exit_title", 0.93):
                 self.dismiss_member_exit()
                 raise MemberExited("协力成员退出房间")
@@ -963,6 +1175,9 @@ class CooperativeLiveFlow:
             else:
                 time.sleep(0.05)
                 continue
+            # The delivery frame can already be the final jacket page. Hand
+            # it to the transition resolver instead of discarding this chance.
+            self._ready_delivery_image = image
             elapsed_ms = (time.monotonic() - started_at) * 1000.0
             print(
                 "CooperativeLive ready_delivery "
@@ -1016,12 +1231,19 @@ class CooperativeLiveFlow:
         final_cover_resolver = self.make_final_cover_entry_resolver()
         started_at = time.monotonic()
         deadline = started_at + float(timeout)
+        initial_image = getattr(self, "_ready_delivery_image", None)
+        self._ready_delivery_image = None
+        capture_count = 0
+        capture_max_ms = 0.0
+        recent_frames = deque(maxlen=8)
 
         def finish(outcome: str) -> str:
             elapsed_ms = (time.monotonic() - started_at) * 1000.0
             print(
                 "CooperativeLive ready_transition "
                 f"outcome={outcome} elapsed_ms={elapsed_ms:.1f} "
+                f"capture_node=CooperativeStartupRefreshScreen "
+                f"capture_count={capture_count} capture_max_ms={capture_max_ms:.1f} "
                 f"timeout_s={float(timeout):.3f}",
                 flush=True,
             )
@@ -1030,7 +1252,16 @@ class CooperativeLiveFlow:
         while time.monotonic() < deadline:
             if self.stopped():
                 raise InterruptedError("用户已停止任务")
-            image = self.capture()
+            capture_started = time.monotonic()
+            if initial_image is not None:
+                image, initial_image = initial_image, None
+            else:
+                image = self.capture_startup()
+                capture_count += 1
+                capture_max_ms = max(
+                    capture_max_ms, (time.monotonic() - capture_started) * 1000.0,
+                )
+            recent_frames.append((time.monotonic() - started_at, image))
             if _frame_is_black_transition(image):
                 # 整屏黑场转场已经开始，成员退出弹窗窗口已过。
                 return finish("black")
@@ -1052,10 +1283,49 @@ class CooperativeLiveFlow:
                 playfield_visible=playfield_visible,
             ):
                 finish("playfield-motion-missed-transition")
+                self._save_startup_failure_evidence(
+                    recent_frames, "playfield-motion-missed-transition",
+                )
                 self.wait_for_life_depleted_after_missed_transition(image)
-            time.sleep(0.1)
+            time.sleep(0.02)
         finish("timeout")
+        self._save_startup_failure_evidence(recent_frames, "transition-timeout")
         self.jump_after_download_timeout()
+
+    def _save_startup_failure_evidence(self, frames, status: str) -> None:
+        """Save a bounded preflight sequence even before Play creates its recorder."""
+        if self.stopped():
+            return
+        try:
+            run = current_live_run()
+            if run is None or not self.settings.get("diagnostic_trace", True):
+                return
+            directory = PROJECT_ROOT / "debug" / "cooperative-startup" / run.run_id
+            directory.mkdir(parents=True, exist_ok=True)
+            entries = []
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+            for index, (elapsed, image) in enumerate(frames):
+                if self.stopped():
+                    return
+                path = directory / f"{stamp}-{index:02d}-{status}.png"
+                if imwrite_unicode(path, image):
+                    entries.append({"elapsed_seconds": elapsed, "screenshot": path.name})
+            preparation = getattr(run, "preparation_identity_image", None)
+            if isinstance(preparation, np.ndarray) and not self.stopped():
+                path = directory / f"{stamp}-preparation.png"
+                if imwrite_unicode(path, preparation):
+                    entries.append({"phase": "preparation-identity", "screenshot": path.name})
+            payload = {
+                "run_id": run.run_id, "status": status,
+                "song_title": run.song_title, "song_level": run.song_level,
+                "difficulty": run.difficulty, "frames": entries,
+            }
+            (directory / f"{stamp}-evidence.json").write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
+            )
+            print(f"CooperativeLive startup_evidence={directory} status={status}", flush=True)
+        except Exception as exc:
+            print(f"CooperativeLive startup_evidence_failed={exc}", flush=True)
 
     def wait_for_life_depleted_after_missed_transition(
         self,
@@ -1111,11 +1381,21 @@ class CooperativeLiveFlow:
         )
 
     def jump_after_startup_failure(self, reason: str) -> None:
-        """从无法安全启动演奏的协力局退后台并返回游戏，然后停止任务。"""
+        """Exit invalid startup without starting mid-song; recover if enabled."""
+        if self.stopped():
+            raise InterruptedError("用户已停止任务")
+        if bool(self.settings.get("disconnect_jump_enabled", False)):
+            self.recover_failed_live_exit()
+            print(
+                "CooperativeLive startup_recovered=true retry_pending=true "
+                f"reason={reason}", flush=True,
+            )
+            raise CooperativeStartupRetry(reason)
         require_game_foreground(self.controller)
         self.controller.post_click_key(3).wait()
         time.sleep(0.6)
         self.controller.post_start_app(GAME_PACKAGE).wait()
+        wait_for_game_capture_ready(self.context)
         deadline = time.monotonic() + 12.0
         foreground_confirmed = False
         while time.monotonic() < deadline:
@@ -1161,23 +1441,51 @@ class CooperativeLiveFlow:
             self.context, self.action_argv(params)
         )
         run = current_live_run()
-        if run is not None and bool(run.disconnect_jump_requested):
-            # 生命归零：不再自动断网跳车（门禁/弹窗在不同设备上不可靠）。
-            # 回主页 → 切回游戏 → 直接结束任务，由用户手动断网跳车。
-            self.controller.post_click_key(3).wait()
-            time.sleep(0.6)
-            self.controller.post_start_app(GAME_PACKAGE).wait()
-            time.sleep(0.8)
-            raise JumpOutUnavailable("生命归零，请手动断网跳车后重试")
-        if not success:
+        jump_requested = run is not None and bool(run.disconnect_jump_requested)
+        if jump_requested or not success:
+            if self.stopped():
+                raise InterruptedError("用户已停止任务")
+            if bool(self.settings.get("disconnect_jump_enabled", False)):
+                self.recover_failed_live_exit()
+                return False  # outer retry loop verifies home and re-enters
+            if jump_requested:
+                raise JumpOutUnavailable("生命归零，未启用自动断网跳车，请手动退出后重试")
             return False
         return True
+
+    def recover_failed_live_exit(self) -> None:
+        """Exit a failed round after Native cleanup; never count it completed."""
+        discard_prearmed_backend("cooperative-failed-live-exit")
+        try:
+            exited = self.disconnect_jump_out()
+        except (InterruptedError, JumpOutUnavailable):
+            raise
+        except Exception as exc:
+            # disconnect_jump_out always confirms network cleanup in finally.
+            print(f"CooperativeDisconnectJump fallback_restart={type(exc).__name__}: {exc}", flush=True)
+            exited = False
+        if self.stopped():
+            raise InterruptedError("用户已停止任务")
+        if not exited:
+            # Root or popup unavailable: restart only the game, not emulator/ADB.
+            stopped = self.controller.post_stop_app(GAME_PACKAGE).wait()
+            if not stopped.succeeded:
+                raise JumpOutUnavailable("协力失败后无法确认游戏已关闭，停止自动重试")
+            if self.stopped():
+                raise InterruptedError("用户已停止任务")
+            started = self.controller.post_start_app(GAME_PACKAGE).wait()
+            if not started.succeeded:
+                raise JumpOutUnavailable("协力失败后游戏重启失败，停止自动重试")
+            wait_for_game_capture_ready(self.context)
+            time.sleep(2.0)
+        print("CooperativeLive failed_round_exited=true retry_pending=true", flush=True)
 
     def wait_for_post_score_destination(
         self,
         names: tuple[str, ...],
         *,
         timeout: float,
+        connection_retry: ConnectRetryState | None = None,
     ) -> str | None:
         """Recognise a result exit before any post-Back corner tap.
 
@@ -1191,13 +1499,17 @@ class CooperativeLiveFlow:
         # 一帧同时检查出口和剧情，不为尚未到达的房间页空等两轮超时。
         self._post_score_refresh = True
         try:
-            state, image = self.wait_for(
-                names, timeout=0.0, detect_member_exit=False,
-            )
+            image = self.capture()
         finally:
             self._post_score_refresh = False
-        if state is not None:
-            return state
+        if self.handle_connect_failed(
+            image, connection_retry or ConnectRetryState(), phase="post-score",
+        ):
+            time.sleep(.2)
+            return "story"
+        for name in names:
+            if self.visible(image, name):
+                return name
         if self.pipeline_box(image, "CooperativeHomeMarker") is not None:
             return "home"
         # 主页“要退出游戏吗”确认框：点“取消”并像剧情页一样跳过本帧
@@ -1223,6 +1535,7 @@ class CooperativeLiveFlow:
         names: tuple[str, ...],
         *,
         inspect_timeout: float,
+        connection_retry: ConnectRetryState | None = None,
     ) -> str | None:
         """完整执行安全像素→BACK→安全像素后再识别终点。"""
         def before_input() -> None:
@@ -1239,15 +1552,189 @@ class CooperativeLiveFlow:
         return self.wait_for_post_score_destination(
             names,
             timeout=inspect_timeout,
+            connection_retry=connection_retry,
         )
+
+    def result_buttons(self, image: np.ndarray) -> dict | None:
+        """Confirm both final result controls before choosing either one."""
+        replay = self.template_box(image, "result_replay", 0.93)
+        confirm = self.template_box(image, "result_confirm", 0.93)
+        if replay is None or confirm is None:
+            return None
+        # Normalized template correlation also matches a dimmed page beneath
+        # a modal. Require the actual bright controls, not their shaded copies.
+        for box in (replay, confirm):
+            x, y, width, height = box
+            button = image[y:y + height, x:x + width, :3]
+            if float(np.median(cv2.cvtColor(button, cv2.COLOR_BGR2HSV)[:, :, 2])) < 220:
+                return None
+        return {"replay": replay, "confirm": confirm}
+
+    def navigate_completed_result(self, *, replay: bool) -> bool:
+        """Choose replay between rounds, confirm on the last, then verify exit.
+
+        Return True only when a joined room is explicitly retained. Ordinary
+        replay returns to room selection and still requires normal entry checks.
+        Inspect between individual cadence inputs so BACK cannot consume the
+        final result page before the requested button is chosen.
+        """
+        deadline = time.monotonic() + POST_SCORE_NAVIGATION_TIMEOUT_SECONDS
+        action = "replay" if replay else "confirm"
+        clicks = 0
+        connection_retry = ConnectRetryState()
+        next_click_at = 0.0
+        back_next = False
+        previous_refresh = getattr(self, "_post_score_refresh", False)
+        self._post_score_refresh = True
+        try:
+            while time.monotonic() < deadline:
+                if self.stopped():
+                    raise InterruptedError("用户已停止任务")
+                image = self.capture()
+                if self.stopped():
+                    raise InterruptedError("用户已停止任务")
+                if self.handle_connect_failed(image, connection_retry, phase="result"):
+                    time.sleep(.2)
+                    continue
+                buttons = self.result_buttons(image)
+                if buttons is not None:
+                    if clicks >= 3 and time.monotonic() >= next_click_at:
+                        raise RuntimeError("协力结算按钮点击3次后仍未消失")
+                    if time.monotonic() >= next_click_at:
+                        x, y, width, height = buttons[action]
+                        self.click((x + width // 2, y + height // 2))
+                        clicks += 1
+                        next_click_at = time.monotonic() + 1.0
+                        print(
+                            f"CooperativeResult action={action} "
+                            f"last_round={str(not replay).lower()} attempt={clicks}",
+                            flush=True,
+                        )
+                    time.sleep(.2)
+                    continue
+
+                if self.pipeline_box(image, "CooperativeHomeMarker") is not None:
+                    if replay:
+                        self.navigate_to_cooperative_room_selection("home")
+                    return False
+                if replay and self.visible(image, "room_search"):
+                    print("CooperativeResult replay_destination=room-selection confirmed=true", flush=True)
+                    return False
+                if replay and self.visible(image, "live_entry"):
+                    self.navigate_to_cooperative_room_selection("live_entry")
+                    return False
+                if self.visible(image, "repeat_room_title"):
+                    if replay and should_stay_in_room(self.settings):
+                        self.stay_in_room()
+                        return True
+                    # A joined-room prompt can follow result confirmation.
+                    # Choose "no" when leaving, including the final round.
+                    self.click((512, 447))
+                    time.sleep(.5)
+                    continue
+
+                quit_box = self.pipeline_box(image, "QuitConfirmCancel")
+                if quit_box is not None:
+                    self.click((int(quit_box.x + quit_box.w // 2),
+                                int(quit_box.y + quit_box.h // 2)))
+                    time.sleep(.2)
+                    continue
+                if handle_story_page(
+                    image, recognise=self.pipeline_box, click=self.click,
+                    stopping=self.stopped,
+                ):
+                    time.sleep(.2)
+                    continue
+
+                if not clicks:
+                    def before_input() -> None:
+                        if self.stopped():
+                            raise InterruptedError("用户已停止任务")
+                        require_game_foreground(self.controller)
+                    back_next = advance_result_cadence(
+                        lambda: self.controller, back_next=back_next,
+                        before_input=before_input, phase="post-score",
+                        log_prefix="CooperativeResult",
+                    )
+                # Once chosen, only inspect the resulting loading/room page;
+                # another BACK could leave the room selector or cancel reentry.
+                time.sleep(.35)
+            raise RuntimeError(
+                f"协力结算60秒内未完成{'再次演出并回到房间选择' if replay else '确定并返回主页'}"
+            )
+        finally:
+            self._post_score_refresh = previous_refresh
+
+    def wait_for_cooperative_restriction(
+        self, image: np.ndarray, *, remaining_budget: float,
+    ) -> bool:
+        """Acknowledge only the known restriction; respect its cooldown."""
+        if self.stopped():
+            raise InterruptedError("用户已停止任务")
+        if self.template_box(image, "restriction_body") is None:
+            return False
+        ok_box = self.template_box(image, "restriction_ok")
+        if ok_box is None:
+            return False
+        result = self.context.run_recognition("CooperativeRestrictionCountdown", image)
+        text = (
+            str(getattr(getattr(result, "best_result", None), "text", ""))
+            if result and result.hit else ""
+        )
+        # Require the full countdown, so a partial OCR result cannot turn
+        # "1分钟24秒" into a 24-second wait. Unknown text gets a bounded recheck.
+        match = re.fullmatch(
+            r"功能限制剩余时间[:：]?(?:(\d+)小时)?(?:(\d+)分(?:钟)?)?(?:(\d+)秒)?",
+            re.sub(r"\s+", "", text),
+        )
+        seconds = None
+        if match and any(value is not None for value in match.groups()):
+            hours, minutes, secs = (int(value or 0) for value in match.groups())
+            seconds = hours * 3600 + minutes * 60 + secs
+        wait_seconds = float(seconds + 2 if seconds is not None else 30)
+        if wait_seconds > remaining_budget:
+            raise RuntimeError(
+                "游戏协力功能暂时受限，超过本次自动等待上限（5分钟）；"
+                f"请等待游戏限制结束后再试。识别倒计时：{text or '未识别'}"
+            )
+        print(
+            "[任务][协力演出][限制等待][INFO] "
+            f"游戏协力功能暂时受限，等待{wait_seconds:g}秒后重试；"
+            f"倒计时：{text or '未识别，稍后复查'}", flush=True,
+        )
+        x, y, width, height = ok_box
+        if self.stopped():
+            raise InterruptedError("用户已停止任务")
+        self.click((x + width // 2, y + height // 2))
+        deadline = time.monotonic() + wait_seconds
+        while time.monotonic() < deadline:
+            if self.stopped():
+                raise InterruptedError("用户已停止任务")
+            time.sleep(max(0.0, min(.5, deadline - time.monotonic())))
+        return True
 
     def navigate_to_cooperative_room_selection(self, origin: str) -> None:
         """Explicitly recover Home/live-select into cooperative room select."""
         deadline = time.monotonic() + 30.0
+        restriction_budget = 300.0
         next_home_click_at = 0.0
         next_entry_click_at = 0.0
+        connection_retry = ConnectRetryState()
         while time.monotonic() < deadline:
             image = self.capture()
+            if self.handle_connect_failed(image, connection_retry, phase="room-reentry"):
+                time.sleep(.2)
+                continue
+            wait_started = time.monotonic()
+            if self.wait_for_cooperative_restriction(
+                image, remaining_budget=restriction_budget,
+            ):
+                elapsed = time.monotonic() - wait_started
+                restriction_budget -= elapsed
+                # Cooldown time does not consume the ordinary navigation
+                # budget, but repeated restriction dialogs remain bounded.
+                deadline += elapsed
+                continue
             if self.visible(image, "room_search"):
                 print(
                     "CooperativeLive state=room-selection "
@@ -1307,13 +1794,13 @@ class CooperativeLiveFlow:
                 continue
 
             time.sleep(0.35)
-        raise RuntimeError(
-            "已离开协力结算，但30秒内未能重新进入协力房间选择页"
-        )
+        self._save_navigation_evidence(image, "room-reentry", "timeout", origin=origin)
+        raise RuntimeError(f"从{origin}恢复协力入口时，30秒内未能进入房间选择页")
 
     def return_to_room_selection(self) -> None:
         deadline = time.monotonic() + POST_SCORE_NAVIGATION_TIMEOUT_SECONDS
         attempts = 0
+        connection_retry = ConnectRetryState()
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -1321,6 +1808,7 @@ class CooperativeLiveFlow:
             state = self.wait_for_post_score_destination(
                 ("room_search", "live_entry"),
                 timeout=min(2.0, remaining),
+                connection_retry=connection_retry,
             )
             if state == "story":
                 continue
@@ -1341,6 +1829,7 @@ class CooperativeLiveFlow:
             state = self.advance_post_score_once(
                 ("room_search", "live_entry"),
                 inspect_timeout=min(2.0, remaining),
+                connection_retry=connection_retry,
             )
             attempts += 1
             print(
@@ -1366,6 +1855,7 @@ class CooperativeLiveFlow:
             raise ValueError("留在房间仅适用于好友邀请房间或房间号入房")
         deadline = time.monotonic() + POST_SCORE_NAVIGATION_TIMEOUT_SECONDS
         result_back_attempts = 0
+        connection_retry = ConnectRetryState()
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -1375,6 +1865,7 @@ class CooperativeLiveFlow:
             state = self.wait_for_post_score_destination(
                 ("repeat_room_title", "room_search", "live_entry"),
                 timeout=min(2.0, remaining),
+                connection_retry=connection_retry,
             )
             if state == "story":
                 continue
@@ -1394,6 +1885,7 @@ class CooperativeLiveFlow:
             state = self.advance_post_score_once(
                 ("repeat_room_title", "room_search", "live_entry"),
                 inspect_timeout=min(2.0, remaining),
+                connection_retry=connection_retry,
             )
             result_back_attempts += 1
             print(
@@ -1427,7 +1919,7 @@ class CooperativeLiveFlow:
             self.wait_for_preparation()
             self.prepare()
             return self.play()
-        except (InterruptedError, MemberExited, JumpOutUnavailable):
+        except (InterruptedError, MemberExited, JumpOutUnavailable, CooperativeStartupRetry):
             raise
         except Exception as exc:
             if isinstance(exc, OSError) and "access violation" in str(exc).lower():
@@ -1448,6 +1940,12 @@ class CooperativeLiveFlow:
         recovery_params = {
             "home_node": "CooperativeHomeMarker",
             "modal_cancel_nodes": ["QuitConfirmCancel"],
+            "modal_retry_nodes": ["CooperativeConnectFailedRetry"],
+            "modal_retry_presence_nodes": ["CooperativeConnectFailedBody"],
+            "modal_retry_limit": 5,
+            "modal_retry_interval_ms": 1000,
+            "modal_retry_min_brightness": 220,
+            "modal_retry_evidence_enabled": True,
             "click_nodes": [
                 "AutoLiveLoginTap",
                 "AutoLiveLoginNext",
@@ -1474,9 +1972,11 @@ class CooperativeLiveFlow:
                 ensure_ascii=False,
             )
         )
+        record_failure_reason("")
         if not CommonRecover().run(self.context, argv):
             raise RuntimeError(
-                f"协力单局失败后无法恢复主页：{reason}"
+                "协力单局失败后无法恢复主页："
+                f"{latest_failure_reason() or reason}"
             )
         self.navigate_to_cooperative_room_selection("home")
 
@@ -1535,7 +2035,10 @@ class CooperativeLiveFlow:
         play_failures = 0
         retry_count = max(
             0,
-            min(99, int(self.settings.get("play_failure_retry_count", 0))),
+            min(99, int(self.settings.get(
+                "play_failure_retry_count",
+                3 if self.settings.get("disconnect_jump_enabled", False) else 0,
+            ))),
         )
         def recover_completed_round(reason):
             try:
@@ -1651,69 +2154,20 @@ class CooperativeLiveFlow:
                 return True
             is_last = total > 0 and completed >= total
 
-            if should_stay_in_room(self.settings):
-                try:
-                    self.stay_in_room()
-                except MemberExited:
-                    if (
-                        is_last
-                        and str(self.settings["member_exit_policy"]) == "reconnect"
-                    ):
-                        try:
-                            self.dismiss_member_exit()
-                        except InterruptedError:
-                            raise
-                        except Exception as exc:
-                            print(
-                                "CooperativeLive post_score_warning="
-                                f"{type(exc).__name__}: {exc}",
-                                flush=True,
-                            )
-                        print(
-                            "CooperativeLive requested_count=complete "
-                            "member_exit=no_reentry",
-                            flush=True,
-                        )
-                        return True
-                    recover_completed_round("已完成演出后成员退出")
-                    reuse_room = False
-                    continue
-                except InterruptedError:
-                    raise
-                except Exception as exc:
-                    if is_last:
-                        print(
-                            "CooperativeLive stay_skipped last_round=true "
-                            f"reason={type(exc).__name__}: {exc}",
-                            flush=True,
-                        )
-                        return True
-                    print(
-                        "CooperativeLive stay=recover "
-                        f"reason={type(exc).__name__}: {exc}",
-                        flush=True,
-                    )
-                    recover_completed_round(
-                        f"结算后未返回房间：{type(exc).__name__}: {exc}"
-                    )
-                    reuse_room = False
-                    continue
-                reuse_room = True
-            elif not is_last:
-                try:
-                    self.return_to_room_selection()
-                except MemberExited:
-                    recover_completed_round("已完成演出后成员退出")
-                except InterruptedError:
-                    raise
-                except Exception as exc:
-                    # 本局已经计入完成；结算页面没有走回房间时恢复主页并继续
-                    # 下一局，而不是把识别失败当成整个任务的致命错误。
-                    print(
-                        "CooperativeLive post_score=recover "
-                        f"reason={type(exc).__name__}: {exc}",
-                        flush=True,
-                    )
+            try:
+                reuse_room = self.navigate_completed_result(replay=not is_last)
+            except InterruptedError:
+                raise
+            except Exception as exc:
+                # The performance is already counted. Recover navigation for
+                # the next round; final-home recovery belongs to Finalize.
+                print(
+                    "CooperativeLive post_score=recover "
+                    f"last_round={str(is_last).lower()} "
+                    f"reason={type(exc).__name__}: {exc}",
+                    flush=True,
+                )
+                if not is_last:
                     recover_completed_round(
                         f"结算后未返回房间：{type(exc).__name__}: {exc}"
                     )
@@ -1735,6 +2189,38 @@ class CooperativeLiveConfigure(CustomAction):
         except Exception as exc:
             record_failure_reason(f"协力演出选项无效：{type(exc).__name__}: {exc}")
             traceback.print_exc()
+            return False
+
+
+@AgentServer.custom_action("CooperativeLiveRecover")
+class CooperativeLiveRecover(CustomAction):
+    """Restore any interrupted escape before game login or room navigation."""
+
+    def run(self, context: Context, argv: CustomAction.RunArg) -> bool:
+        try:
+            if context.tasker.stopping:
+                return True
+            settings = current_cooperative_settings()
+            progress = SimpleNamespace(
+                custom_action_param=json.dumps({
+                    "task_name": "CooperativeLive", "label": "协力演出",
+                    "total": int(settings["count"]), "phase": "initialize",
+                }),
+                task_detail=getattr(argv, "task_detail", None),
+            )
+            if not TaskProgress().run(context, progress):
+                raise RuntimeError("协力演出次数初始化失败")
+            flow = CooperativeLiveFlow(context, settings)
+            gate = flow.check_escape_available()
+            if gate is not None and not gate.restore_stale_escapes():
+                raise JumpOutUnavailable("上次中断的游戏网络未恢复：" + str(gate.last_error))
+            return CommonRecover().run(context, argv)
+        except InterruptedError:
+            return bool(context.tasker.stopping)
+        except Exception as exc:
+            reason = f"协力启动恢复失败：{type(exc).__name__}: {exc}"
+            record_failure_reason(reason)
+            print(f"[任务][协力演出][启动][ERROR] {reason}", flush=True)
             return False
 
 
@@ -1809,12 +2295,6 @@ class CooperativeLiveFinalize(CustomAction):
     def run(self, context: Context, argv: CustomAction.RunArg) -> bool:
         try:
             if context.tasker.stopping:
-                return True
-            if should_stay_in_room(current_cooperative_settings()):
-                print(
-                    "CooperativeLive finalize=stay current_room=true",
-                    flush=True,
-                )
                 return True
             if not CommonRecover().run(context, argv):
                 print("CooperativeLive finalize_warning=演出已完成，主页恢复失败不终止任务", flush=True)

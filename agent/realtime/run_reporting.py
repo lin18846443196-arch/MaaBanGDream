@@ -100,6 +100,7 @@ def result_report_payload(
         "action_counts": stats.action_counts,
         "engine_mode": getattr(stats, "engine_mode", "legacy"),
         "native": dict(getattr(stats, "native_report", {})),
+        "capture_diagnostics": dict(getattr(stats, "capture_diagnostics", {})),
         "life_monitor_diagnostics": dict(
             getattr(stats, "life_monitor_diagnostics", {})
         ),

@@ -220,10 +220,64 @@ class FinalCoverResolver:
         self._candidate_frames = 0
         # 退化诊断：每个新指纹只打一条日志，避免逐帧刷屏。
         self._logged_fingerprints: set[str] = set()
+        # Per-frame visibility remains in last_reason. A loading transition
+        # must not erase a concrete identity conflict from an earlier cover.
+        self._retained_failure_reason: str | None = None
+        self._retained_failure_priority = 0
+        self._retained_failure_fingerprint: str | None = None
+        self._latest_failed_fingerprint: str | None = None
+        self._resolution_attempted = False
 
     @property
     def observed_title_confidence(self) -> float:
         return self._observed_title_confidence
+
+    @property
+    def failure_reason(self) -> str:
+        """The strongest failed identity check, or current visibility state."""
+        return self._retained_failure_reason or self.last_reason
+
+    @property
+    def failure_diagnostics(self) -> dict[str, object]:
+        return {
+            "blocking_reason": self.failure_reason,
+            "resolution_attempted": self._resolution_attempted,
+            "failed_fingerprint": self._latest_failed_fingerprint,
+            "blocking_fingerprint": self._retained_failure_fingerprint,
+            "observed_title": self.observed_title,
+            "observed_title_confidence": self._observed_title_confidence,
+            "observed_level": self.observed_level,
+            "difficulty": self.difficulty,
+        }
+
+    def _retain_resolution_failure(
+        self, reason: str, fingerprint: str | None = None,
+    ) -> None:
+        if reason in {
+            "final cover jacket is not visible",
+            "waiting for stable final cover jacket",
+            "final cover has not been observed",
+        }:
+            return
+        self._resolution_attempted = True
+        self._latest_failed_fingerprint = fingerprint
+        # Difficulty/level constraints and ambiguous mappings explain why a
+        # known candidate was rejected. Keep them over an unrelated hash miss.
+        priority = (
+            3 if any(word in reason for word in ("difficulty", "level", "ambiguous"))
+            else 2 if any(word in reason for word in ("conflicts", "local", "title"))
+            else 1
+        )
+        if priority >= self._retained_failure_priority:
+            self._retained_failure_reason = reason
+            self._retained_failure_priority = priority
+            self._retained_failure_fingerprint = fingerprint
+
+    def _clear_resolution_failure(self) -> None:
+        self._retained_failure_reason = None
+        self._retained_failure_priority = 0
+        self._retained_failure_fingerprint = None
+        self._latest_failed_fingerprint = None
 
     def refresh_observed_title(self, text: str, confidence: float) -> bool:
         """用最终封面页自身的标题 OCR 刷新准备页标题。
@@ -273,7 +327,9 @@ class FinalCoverResolver:
             confirmation = self.gate.observe(image)
             self.last_reason = self.gate.last_reason
             if confirmation is None:
+                self._retain_resolution_failure(self.last_reason)
                 return None
+            self._clear_resolution_failure()
             return FinalCoverResolution(
                 confirmation=confirmation,
                 selection=self.gate.selection,
@@ -301,6 +357,7 @@ class FinalCoverResolver:
             return None
         if self.require_observed_title and not self.observed_title:
             self.last_reason = "final cover title is not confirmed"
+            self._retain_resolution_failure(self.last_reason, identity.song_id)
             return None
 
         assert self.repository is not None
@@ -322,6 +379,7 @@ class FinalCoverResolver:
                     flush=True,
                 )
             self.last_reason = resolution.reason
+            self._retain_resolution_failure(self.last_reason, identity.song_id)
             return None
         gate = FinalCoverGate(
             resolution.selection,
@@ -333,6 +391,7 @@ class FinalCoverResolver:
         confirmation = gate.observe(image)
         self.last_reason = gate.last_reason
         if confirmation is None:
+            self._retain_resolution_failure(self.last_reason, identity.song_id)
             if (
                 gate.last_reason == "final cover jacket does not match selected chart"
                 and identity.song_id not in self._logged_fingerprints
@@ -348,6 +407,7 @@ class FinalCoverResolver:
                 )
             return None
         self.gate = gate
+        self._clear_resolution_failure()
         return FinalCoverResolution(
             confirmation=confirmation,
             selection=resolution.selection,

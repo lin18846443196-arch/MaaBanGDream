@@ -13,9 +13,11 @@ import numpy as np
 try:
     from ..foreground_guard import require_game_foreground
     from ..task_reporting import record_failure_reason
+    from ..screen_refresh import capture_image
 except ImportError:  # AgentServer imports realtime as a top-level package.
     from foreground_guard import require_game_foreground
     from task_reporting import record_failure_reason
+    from screen_refresh import capture_image
 
 from maa.agent.agent_server import AgentServer
 from maa.context import Context
@@ -251,6 +253,10 @@ class RealtimeDifficultySelect(CustomAction):
     def run(self, context: Context, argv: CustomAction.RunArg) -> bool:
         try:
             params = json.loads(argv.custom_action_param or "{}")
+            def capture_current():
+                if params.get('refresh_node'):
+                    return capture_image(context, node=params['refresh_node'])
+                return context.tasker.controller.post_screencap().wait().get()
             requested = str(params.get("difficulty", "Easy"))
             if requested not in DIFFICULTY_TARGETS:
                 raise ValueError(f"unsupported difficulty: {requested}")
@@ -302,6 +308,14 @@ class RealtimeDifficultySelect(CustomAction):
                 for attempt in range(1, attempts + 1):
                     if context.tasker.stopping:
                         return True
+                    if params.get('page_guard'):
+                        before = capture_current()
+                        page = context.run_recognition(params['page_guard'], before)
+                        if not page or not page.hit:
+                            raise RuntimeError('难度选择页已改变，停止输入')
+                        controller = context.tasker.controller
+                        if context.tasker.stopping:
+                            return True
                     if params.get("mode") == "medley":
                         # 组曲随机选曲后再次核对页面，防止中途退回总览时
                         # 仍向成员卡或综合力区域发送标准难度坐标。
@@ -311,7 +325,8 @@ class RealtimeDifficultySelect(CustomAction):
                     require_game_foreground(controller)
                     controller.post_click(*target).wait()
                     time.sleep(float(params.get("verify_delay_seconds", 0.35)))
-                    image = controller.post_screencap().wait().get()
+                    image = capture_current()
+                    controller = context.tasker.controller
                     recognized = selected_difficulty(image, targets)
                     last_recognized = recognized
                     print(
@@ -427,9 +442,8 @@ class RealtimeDifficultySelect(CustomAction):
                         if context.tasker.stopping:
                             return True
                         time.sleep(identity_delay)
-                        identity_image = (
-                            controller.post_screencap().wait().get()
-                        )
+                        identity_image = capture_current()
+                        controller = context.tasker.controller
 
                     assert best_reading is not None
                     (

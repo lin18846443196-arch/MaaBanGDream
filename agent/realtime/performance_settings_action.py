@@ -17,9 +17,11 @@ from maa.custom_action import CustomAction
 try:
     from ..foreground_guard import require_game_foreground
     from ..task_reporting import record_failure_reason
+    from ..screen_refresh import ScreenRefreshInterrupted, capture_image
 except ImportError:
     from foreground_guard import require_game_foreground
     from task_reporting import record_failure_reason
+    from screen_refresh import ScreenRefreshInterrupted, capture_image
 
 from .profile_action import PROJECT_ROOT
 from .profile_store import (
@@ -281,6 +283,8 @@ def _read_speed_stable(
     for _ in range(attempts):
         try:
             return read_current()
+        except ScreenRefreshInterrupted:
+            raise
         except RuntimeError as exc:
             last_error = exc
             time.sleep(delay_seconds)
@@ -310,6 +314,8 @@ def _select_first_tab_and_read(
         time.sleep(settle_delay_seconds)
         try:
             return _read_speed_stable(read_current)
+        except ScreenRefreshInterrupted:
+            raise
         except RuntimeError as exc:
             last_error = exc
     raise RuntimeError(
@@ -524,8 +530,10 @@ class RealtimePerformanceSettingsGate(CustomAction):
                 f"requested={requested_difficulty} effective={difficulty}",
                 flush=True,
             )
+        before = (capture_image(context, node=params['refresh_node'])
+                  if params.get('refresh_node') else
+                  context.tasker.controller.post_screencap().wait().get())
         controller = context.tasker.controller
-        before = controller.post_screencap().wait().get()
         if context.tasker.stopping:
             return True
         if params.get("confirm_preparation_identity", False):

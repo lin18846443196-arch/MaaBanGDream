@@ -64,6 +64,11 @@ class CooperativePreparePopupDetector:
     _WHITE_SAT_MAX = 70
     _WHITE_VAL_MIN = 190
 
+    def __init__(self, *, verify_content: bool = False):
+        # Multiplayer start gates use the stricter check: white note heads/
+        # effects can satisfy the broad rectangle + pink-pixel heuristic.
+        self.verify_content = bool(verify_content)
+
     def __call__(self, image: Any) -> bool:
         if (
             not isinstance(image, np.ndarray)
@@ -153,6 +158,23 @@ class CooperativePreparePopupDetector:
             <= self._MAX_BOX_CENTER_Y * height
         ):
             return False
+
+        if self.verify_content:
+            # The dialog scales around the screen centre. Its solid white
+            # body and dark text on the right survive the scale animation;
+            # hollow note rings and judgement glyphs do not have both.
+            if abs(center_x / width - .5) > .04:
+                return False
+            if stats[largest, cv2.CC_STAT_AREA] / box_area < .80:
+                return False
+            text_roi = hsv[box_y:box_y+box_h,
+                           box_x+box_w//3:box_x+box_w]
+            dark = (text_roi[:, :, 1] < 100) & (text_roi[:, :, 2] < 160)
+            text_rows = np.count_nonzero(dark, axis=1)
+            text_columns = np.count_nonzero(dark, axis=0)
+            if (np.count_nonzero(text_rows) < .10 * box_h
+                    or np.count_nonzero(text_columns) < .15 * text_roi.shape[1]):
+                return False
 
         # 只统计白色主体左三分之一内的粉色像素，保证“白底 + 粉图标”
         # 同时成立才视为弹窗。

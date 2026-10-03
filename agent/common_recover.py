@@ -8,19 +8,25 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from maa.agent.agent_server import AgentServer
 from maa.context import Context
 from maa.custom_action import CustomAction
 
 try:
-    from .foreground_guard import ForegroundAppMismatch, foreground_package, require_game_foreground
+    from .capture_transition import wait_for_game_capture_ready
+    from .foreground_guard import ForegroundAppMismatch, foreground_package, require_game_foreground, mumu_extras_active
     from .screen_refresh import ScreenRefreshCancelled, capture_image
-    from .task_reporting import log_task
+    from .task_reporting import log_task, record_failure_reason
+    from .maa_shell_compat import shell_output
     from .realtime.vision_io import imwrite_unicode
 except ImportError:  # AgentServer loads this module from the agent directory.
-    from foreground_guard import ForegroundAppMismatch, foreground_package, require_game_foreground
+    from capture_transition import wait_for_game_capture_ready
+    from foreground_guard import ForegroundAppMismatch, foreground_package, require_game_foreground, mumu_extras_active
     from screen_refresh import ScreenRefreshCancelled, capture_image
-    from task_reporting import log_task
+    from task_reporting import log_task, record_failure_reason
+    from maa_shell_compat import shell_output
     from realtime.vision_io import imwrite_unicode
 
 
@@ -39,6 +45,34 @@ def _wait_unless_stopping(context: Context, seconds: float) -> bool:
             return False
         time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
     return not context.tasker.stopping
+
+
+def _save_modal_retry_evidence(image: np.ndarray, status: str, **details) -> None:
+    """Attach bounded recovery evidence to the current song's recording."""
+    try:
+        try:
+            from .realtime.live_session import current_live_run, append_current_run_event
+        except ImportError:
+            from realtime.live_session import current_live_run, append_current_run_event
+        current = current_live_run()
+        if current is None or not current.recording_path:
+            return
+        project_root = Path(__file__).resolve().parents[1]
+        directory = Path(current.recording_path)
+        if not directory.is_absolute():
+            directory = project_root / directory
+        output = directory / "navigation" / (
+            f"{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}-"
+            f"common-recover-{status}.png"
+        )
+        output.parent.mkdir(parents=True, exist_ok=True)
+        if imwrite_unicode(output, image):
+            details["screenshot"] = str(output.relative_to(directory))
+        append_current_run_event(
+            project_root, "common-recover-connection", status, details=details,
+        )
+    except Exception as exc:
+        print(f"CommonRecover connection_evidence_failed={exc}", flush=True)
 
 
 def _wait_for_adb(adb_path: str, serial: str, timeout: float = 90.0) -> bool:
@@ -93,7 +127,7 @@ def _reboot_ldplayer(
 
 def _package_running(controller: Any, package: str) -> bool | None:
     try:
-        output = controller.post_shell(f"pidof {package}", 5000).wait().get()
+        output = shell_output(controller, f"pidof {package}", 5000)
     except Exception:
         return None
     return bool(str(output or "").strip())
@@ -118,6 +152,11 @@ def _prepare_game(
         return True, True
 
     if actual == package:
+        if mumu_extras_active(controller):
+            # The renderer selects an app panel only after StartApp sets its
+            # package hint; global desktop focus can stay on another display.
+            controller.post_start_app(package).wait()
+            return True, True
         log_task(
             "游戏启动",
             "进程",
@@ -172,7 +211,10 @@ class CommonRecover(CustomAction):
             return self._run(context, argv)
         except ScreenRefreshCancelled:
             return bool(context.tasker.stopping)
+        except InterruptedError:
+            return bool(context.tasker.stopping)
         except Exception as exc:
+            record_failure_reason(f"主页恢复回调异常：{type(exc).__name__}: {exc}")
             log_task(
                 "游戏启动",
                 "异常",
@@ -242,6 +284,22 @@ class CommonRecover(CustomAction):
         modal_cancel_nodes = [
             str(node) for node in params.get("modal_cancel_nodes", [])
         ]
+        modal_retry_nodes = [
+            str(node) for node in params.get("modal_retry_nodes", [])
+        ]
+        modal_retry_presence_nodes = [
+            str(node) for node in params.get("modal_retry_presence_nodes", [])
+        ]
+        modal_retry_limit = min(5, max(1, int(params.get("modal_retry_limit", 5))))
+        modal_retry_interval = max(
+            1.0, int(params.get("modal_retry_interval_ms", 1000)) / 1000,
+        )
+        modal_retry_min_brightness = max(
+            0, int(params.get("modal_retry_min_brightness", 0)),
+        )
+        modal_retry_evidence_enabled = bool(
+            params.get("modal_retry_evidence_enabled", False)
+        )
         live_failed_continue_node = str(
             params.get("live_failed_continue_node", "LiveFailedContinue")
         )
@@ -288,13 +346,20 @@ class CommonRecover(CustomAction):
         if context.tasker.stopping:
             return True
         ready, app_started = _prepare_game(context, package)
+        app_started = app_started or bool(params.get("app_just_started", False))
         if not ready:
             if context.tasker.stopping:
                 return True
             return False
 
+        if app_started:
+            wait_for_game_capture_ready(context, package)
+
         emulator_rebooted = False
         restart = 0
+        modal_retry_attempts = 0
+        modal_retry_seen = False
+        modal_retry_unclickable_saved = False
         while restart <= restart_limit + (1 if emulator_rebooted else 0):
             restart_round = restart
             restart += 1
@@ -303,6 +368,8 @@ class CommonRecover(CustomAction):
             login_tap_attempted = False
             login_recovery_active = False
             login_marker_attempts = 0
+            title_clicks = 0
+            next_title_click = 0.0
             resource_download_clicked = False
             resource_download_visible = False
             resource_download_deadline: float | None = None
@@ -316,6 +383,10 @@ class CommonRecover(CustomAction):
                 home_stable_seconds > 0
                 and bool(params.get("home_confirmation_pending", False))
             )
+            # A cancelled modal can reveal a title, story, or other page.
+            # Suppress input only for a bounded closing animation, not until
+            # Home appears (which may require logging in first).
+            home_pending_until = time.monotonic() + 2.0
             while time.monotonic() < deadline:
                 if context.tasker.stopping:
                     return True
@@ -339,7 +410,85 @@ class CommonRecover(CustomAction):
                             return True
                         continue
                     print(f"CommonRecover {exc}", flush=True)
+                    record_failure_reason(
+                        f"游戏启动恢复失败：游戏所在画面未确认前台，"
+                        f"期望 {package}，实际 {actual or 'unknown'}"
+                    )
                     return False
+                # A network modal can leave the Home marker fully visible
+                # behind it. Inspect the combined body/button guard before
+                # accepting Home or sending any BACK/cancel/background input.
+                retry_result = None
+                retry_node = ""
+                for node in modal_retry_nodes:
+                    result = context.run_recognition(node, image)
+                    if result and result.hit and result.box:
+                        if modal_retry_min_brightness:
+                            box = result.box
+                            button = image[
+                                box.y:box.y + box.h, box.x:box.x + box.w, :3
+                            ]
+                            if not button.size or float(np.median(
+                                button.max(axis=2)
+                            )) < modal_retry_min_brightness:
+                                continue
+                        retry_result, retry_node = result, node
+                        break
+                retry_present = retry_result is not None
+                if not retry_present:
+                    for node in modal_retry_presence_nodes:
+                        result = context.run_recognition(node, image)
+                        if result and result.hit:
+                            retry_present = True
+                            break
+                if context.tasker.stopping:
+                    return True
+                if retry_present:
+                    modal_retry_seen = True
+                    home_candidate_since = None
+                    if modal_retry_attempts >= modal_retry_limit:
+                        reason = (
+                            f"连接失败弹窗重试 {modal_retry_limit} 次后仍未消失；"
+                            "本次任务停止，请检查游戏连接"
+                        )
+                        if modal_retry_evidence_enabled:
+                            _save_modal_retry_evidence(
+                                image, "exhausted", attempts=modal_retry_attempts,
+                                limit=modal_retry_limit, reason=reason,
+                            )
+                        record_failure_reason(reason)
+                        log_task("游戏启动", "连接恢复", "ERROR", reason)
+                        return False
+                    if retry_result is not None:
+                        if context.tasker.stopping:
+                            return True
+                        box = retry_result.box
+                        controller.post_click(
+                            box.x + box.w // 2,
+                            box.y + box.h // 2,
+                        ).wait()
+                        modal_retry_attempts += 1
+                        if modal_retry_evidence_enabled:
+                            _save_modal_retry_evidence(
+                                image, "retry", node=retry_node,
+                                attempt=modal_retry_attempts, limit=modal_retry_limit,
+                            )
+                        log_task(
+                            "游戏启动", "连接恢复", "INFO",
+                            f"检测到连接失败弹窗，已点击重试：{retry_node}，"
+                            f"第 {modal_retry_attempts}/{modal_retry_limit} 次",
+                        )
+                    elif modal_retry_evidence_enabled and not modal_retry_unclickable_saved:
+                        modal_retry_unclickable_saved = True
+                        _save_modal_retry_evidence(
+                            image, "retry-button-unrecognized",
+                            attempts=modal_retry_attempts,
+                        )
+                    # A missing button may be a closing/opening animation.
+                    # Preserve the modal guard while passively rechecking.
+                    if not _wait_unless_stopping(context, modal_retry_interval):
+                        return True
+                    continue
                 # 生命归零的“演出失败”弹窗必须先点“退出”再确认退出，否则
                 # ESC 会在弹窗与退出确认框之间来回切换，形成死循环。
                 if not exiting_failed_live:
@@ -426,7 +575,12 @@ class CommonRecover(CustomAction):
                 if modal_dismissed:
                     if home_stable_seconds > 0:
                         home_confirmation_pending = True
+                        home_pending_until = time.monotonic() + 2.0
                         home_candidate_since = None
+                    login_started = not login_mode
+                    login_recovery_active = False
+                    login_tap_attempted = False
+                    login_marker_attempts = 0
                     if not _wait_unless_stopping(context, interval):
                         return True
                     continue
@@ -439,6 +593,7 @@ class CommonRecover(CustomAction):
                         now = time.monotonic()
                         if home_candidate_since is None:
                             home_candidate_since = now
+                            home_pending_until = now + 2.0
                         if now - home_candidate_since < home_stable_seconds:
                             if not _wait_unless_stopping(context, 0.05):
                                 return True
@@ -453,11 +608,13 @@ class CommonRecover(CustomAction):
                     return True
                 home_candidate_since = None
                 if home_confirmation_pending and not download_confirm_present:
-                    # 已点取消后，模板低分通常属于关闭动画。保持无输入等待，
-                    # 直到弹窗消失且主页连续稳定；整体仍受恢复超时预算约束。
-                    if not _wait_unless_stopping(context, 0.05):
-                        return True
-                    continue
+                    if time.monotonic() < home_pending_until:
+                        if not _wait_unless_stopping(context, 0.05):
+                            return True
+                        continue
+                    home_confirmation_pending = False
+                    log_task("游戏启动", "主页恢复", "INFO",
+                             "关闭动画等待结束，重新识别当前页面（含标题／登录）")
                 if download_confirm_present:
                     home_confirmation_pending = False
 
@@ -545,6 +702,37 @@ class CommonRecover(CustomAction):
                     deadline = now + timeout
                     grace_deadline = now + startup_grace
 
+                # Title recognition must also run after login/close clicks;
+                # otherwise the ESC-only recovery state can strand this page.
+                if login_mode and not (back_only and restart_round == 0):
+                    title = context.run_recognition(login_start_node, image)
+                    if title and title.hit:
+                        now = time.monotonic()
+                        if title_clicks < 3 and now >= next_title_click:
+                            if context.tasker.stopping:
+                                return True
+                            x, y = (int(value) for value in login_start_target)
+                            controller.post_click(x, y).wait()
+                            title_clicks += 1
+                            next_title_click = now + 3.0
+                            login_started = login_seen = True
+                            login_recovery_active = not tap_anywhere_mode
+                            login_tap_attempted = False
+                            if title_clicks == 1:
+                                deadline = now + timeout
+                            grace_deadline = now + max(startup_grace, 5.0)
+                            log_task("游戏启动", "登录", "INFO",
+                                     f"识别到登录界面，已点击开始位置 ({x}, {y})，第 {title_clicks}/3 次")
+                        if not _wait_unless_stopping(context, interval):
+                            return True
+                        continue
+                    if not login_started:
+                        login_marker_attempts += 1
+                        if login_marker_attempts < login_marker_priority_attempts:
+                            if not _wait_unless_stopping(context, interval):
+                                return True
+                            continue
+
                 if back_only and restart_round == 0:
                     safe_story_clicked = False
                     for node in back_only_click_nodes:
@@ -607,6 +795,10 @@ class CommonRecover(CustomAction):
                             if not _wait_unless_stopping(context, interval):
                                 return True
                             continue
+                    if login_recovery_active and time.monotonic() < grace_deadline:
+                        if not _wait_unless_stopping(context, interval):
+                            return True
+                        continue
                     accelerate_back = (
                         back_only
                         and restart_round == 0
@@ -626,38 +818,6 @@ class CommonRecover(CustomAction):
                         return True
                     continue
                 clicked = False
-                if login_mode and not login_started:
-                    login_marker_attempts += 1
-                    result = context.run_recognition(login_start_node, image)
-                    if result and result.hit:
-                        if context.tasker.stopping:
-                            return True
-                        x, y = (int(value) for value in login_start_target)
-                        controller.post_click(x, y).wait()
-                        login_started = True
-                        login_seen = True
-                        clicked = True
-                        if not tap_anywhere_mode:
-                            login_recovery_active = True
-                            deadline = time.monotonic() + timeout
-                            grace_deadline = time.monotonic()
-                        log_task(
-                            "游戏启动",
-                            "登录",
-                            "INFO",
-                            f"识别到登录界面，已点击开始位置 ({x}, {y})",
-                        )
-                    elif (
-                        login_marker_attempts
-                        < login_marker_priority_attempts
-                    ):
-                        # The bottom-right menu marker appears later and is
-                        # more stable than the animated "tap to start" text.
-                        # Give it several fresh frames before allowing the
-                        # generic login click nodes to take over.
-                        if not _wait_unless_stopping(context, interval):
-                            return True
-                        continue
                 pending_login_tap = (
                     tap_anywhere_mode
                     and login_started
@@ -681,7 +841,7 @@ class CommonRecover(CustomAction):
                     clicked = True
                     login_recovery_active = True
                     deadline = time.monotonic() + timeout
-                    grace_deadline = time.monotonic()
+                    grace_deadline = time.monotonic() + max(startup_grace, 5.0)
                     log_task(
                         "游戏启动",
                         "登录",
@@ -704,7 +864,7 @@ class CommonRecover(CustomAction):
                     clicked = True
                     login_recovery_active = True
                     deadline = time.monotonic() + timeout
-                    grace_deadline = time.monotonic()
+                    grace_deadline = time.monotonic() + max(startup_grace, 5.0)
                     log_task(
                         "游戏启动",
                         "登录",
@@ -713,10 +873,7 @@ class CommonRecover(CustomAction):
                     )
                 if (
                     not clicked
-                    and (
-                        (login_mode and login_started)
-                        or time.monotonic() >= grace_deadline
-                    )
+                    and time.monotonic() >= grace_deadline
                 ):
                     if context.tasker.stopping:
                         return True
@@ -730,6 +887,19 @@ class CommonRecover(CustomAction):
                     )
                 if not _wait_unless_stopping(context, interval):
                     return True
+            if modal_retry_seen:
+                reason = (
+                    f"连接失败弹窗重试 {modal_retry_attempts} 次后，"
+                    f"{int(timeout)} 秒内仍未能确认主页；本次任务停止"
+                )
+                if modal_retry_evidence_enabled:
+                    _save_modal_retry_evidence(
+                        image, "timeout", attempts=modal_retry_attempts,
+                        timeout_seconds=timeout, reason=reason,
+                    )
+                record_failure_reason(reason)
+                log_task("游戏启动", "连接恢复", "ERROR", reason)
+                return False
             if restart_round < restart_limit:
                 if context.tasker.stopping:
                     return True
@@ -756,6 +926,7 @@ class CommonRecover(CustomAction):
                 if context.tasker.stopping:
                     return True
                 controller.post_start_app(package).wait()
+                wait_for_game_capture_ready(context, package)
                 app_started = True
                 log_task(
                     "游戏启动",
@@ -789,9 +960,11 @@ class CommonRecover(CustomAction):
                     app_started = True
                     controller = context.tasker.controller
                     controller.post_start_app(package).wait()
+                    wait_for_game_capture_ready(context, package)
                     if not _wait_unless_stopping(context, restart_wait):
                         return True
                 else:
+                    record_failure_reason("模拟器重启后 adb 未恢复；本次任务停止")
                     log_task(
                         "游戏启动",
                         "模拟器",
@@ -799,11 +972,15 @@ class CommonRecover(CustomAction):
                         "模拟器重启后 adb 未恢复；本次任务停止",
                     )
                     return False
+        failure_reason = (
+            f"经过初次启动和 {restart_limit} 次重启仍未识别主页；"
+            "可能停留在账号、验证码、实名或未收录页面"
+        )
+        record_failure_reason(failure_reason)
         log_task(
             "游戏启动",
             "结束",
             "ERROR",
-            f"经过初次启动和 {restart_limit} 次重启仍未识别主页；"
-            "可能停留在账号、验证码、实名或未收录页面",
+            failure_reason,
         )
         return False

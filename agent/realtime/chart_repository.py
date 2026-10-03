@@ -56,6 +56,29 @@ class CatalogSongResolution:
     reason: str
 
 
+def _coalesce_equivalent_charts(songs: list[dict[str, Any]], difficulty: str) -> list[dict[str, Any]]:
+    """Collapse aliases only when their playable chart and cover agree.
+
+    CN entries 786/790 share an Expert chart, but not all difficulties.
+    The selected file still passes normal content-hash validation below.
+    """
+    unique: dict[tuple, dict[str, Any]] = {}
+    unresolved = []
+    for song in songs:
+        entry = song.get("difficulties", {}).get(difficulty, {})
+        digest = entry.get("chart_sha256", "")
+        fingerprints = tuple(sorted(song.get("fingerprints", ())))
+        if not re.fullmatch(r"[0-9a-f]{64}", str(digest)) or not fingerprints:
+            unresolved.append(song)
+            continue
+        key = (digest, entry.get("level"), entry.get("expected_notes"),
+               fingerprints, _catalog_song_is_full(song))
+        prior = unique.get(key)
+        if prior is None or int(song["bestdori_song_id"]) < int(prior["bestdori_song_id"]):
+            unique[key] = song
+    return list(unique.values()) + unresolved
+
+
 class LocalChartRepository:
     """Resolve a confirmed song fingerprint and exact difficulty locally."""
 
@@ -239,6 +262,7 @@ class LocalChartRepository:
                     ),
                 )
             return ChartResolution(None, "song fingerprint is not confirmed")
+        matches = _coalesce_equivalent_charts(matches, normalized_difficulty)
         if len(matches) != 1:
             return ChartResolution(None, "song fingerprint mapping is ambiguous")
 
@@ -281,16 +305,12 @@ class LocalChartRepository:
         selected_level = int(level) if level is not None else _difficulty_level(
             song, normalized_difficulty,
         )
-        same_level_shared = sum(
-            1
-            for candidate in fingerprint_matches
-            if (
-                selected_level is not None
-                and _difficulty_level_matches(
-                    candidate, normalized_difficulty, selected_level,
-                )
+        same_level_shared = len(_coalesce_equivalent_charts([
+            candidate for candidate in fingerprint_matches
+            if selected_level is not None and _difficulty_level_matches(
+                candidate, normalized_difficulty, selected_level,
             )
-        )
+        ], normalized_difficulty))
         return ChartResolution(
             ChartSelection(
                 bestdori_song_id=song["bestdori_song_id"],
