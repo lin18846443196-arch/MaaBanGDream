@@ -4,6 +4,10 @@
     [string]$OutputDirectory,
     [string]$BuildPython,
     [string]$RuntimePythonRoot,
+    [string]$RuntimeArchive,
+    [string]$RuntimeArchiveSha256,
+    [string]$NativeExtension,
+    [string]$NativeExtensionSha256,
     [switch]$AllowDirty
 )
 
@@ -60,6 +64,8 @@ foreach ($required in @(
     $mfaLicense,
     $performanceSettings,
     $versionChecker,
+    (Join-Path $projectRoot 'packaging\RhythmPilot.targets'),
+    (Join-Path $projectRoot 'packaging\rhythmpilot.ico'),
     (Join-Path $projectRoot 'packaging\start-maabangdream.cmd'),
     (Join-Path $projectRoot 'docs\release-package.md'),
     (Join-Path $projectRoot $releaseNotesRelativePath),
@@ -69,6 +75,7 @@ foreach ($required in @(
     (Join-Path $projectRoot 'licenses\LICENSE-MaaFramework-LGPL-3.0.md'),
     (Join-Path $projectRoot 'scripts\start-release.ps1'),
     (Join-Path $projectRoot 'scripts\normalize-release-directory.ps1'),
+    (Join-Path $projectRoot 'scripts\restart-release.ps1'),
     $zipBuilder
 )) {
     if (-not (Test-Path -LiteralPath $required)) {
@@ -80,6 +87,9 @@ if (-not (Select-String `
     -SimpleMatch 'SupportsSelectedResourceUpdateSource' `
     -Quiet)) {
     throw 'MFA source is missing the MaaBanGDream Mirror update guard.'
+}
+if (-not (Select-String -LiteralPath $versionChecker -SimpleMatch '"RhythmPilot"' -Quiet)) {
+    throw 'Apply and commit the RhythmPilot MFA branding patch in the isolated MFA source checkout first.'
 }
 
 if (-not $AllowDirty) {
@@ -98,7 +108,7 @@ if (-not $AllowDirty) {
 }
 
 $outputFull = [System.IO.Path]::GetFullPath($OutputDirectory)
-$packageName = "MaaBanGDream-v$Version-win-x64"
+$packageName = "RhythmPilot-v$Version-win-x64"
 $packageRoot = [System.IO.Path]::GetFullPath(
     (Join-Path $outputFull $packageName)
 )
@@ -121,9 +131,20 @@ dotnet publish $mfaProject `
     -c Release `
     -r win-x64 `
     --self-contained true `
+    -p:MaaBanGDreamPackageBuild=true `
+    "-p:RhythmPilotBrandRoot=$(Join-Path $projectRoot 'packaging')" `
+    "-p:CustomAfterMicrosoftCommonTargets=$(Join-Path $projectRoot 'packaging\RhythmPilot.targets')" `
     -o $packageRoot
 if ($LASTEXITCODE -ne 0) {
     throw 'Customized MFAAvalonia publish failed.'
+}
+foreach ($hostFile in @('RhythmPilot.exe', 'RhythmPilot.dll', 'RhythmPilot.deps.json', 'RhythmPilot.runtimeconfig.json')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $packageRoot $hostFile) -PathType Leaf)) {
+        throw "Branded desktop host is missing: $hostFile"
+    }
+}
+if (Test-Path -LiteralPath (Join-Path $packageRoot 'MFAAvalonia.exe')) {
+    throw 'Release publish unexpectedly retained the generic MFAAvalonia.exe host.'
 }
 Get-ChildItem -LiteralPath $packageRoot -Recurse -File -Filter '*.pdb' |
     Remove-Item -Force
@@ -141,6 +162,7 @@ dotnet publish $mfaUpdaterProject `
     -p:PublishSingleFile=true `
     -p:PublishTrimmed=true `
     -p:TrimMode=link `
+    "-p:CustomAfterMicrosoftCommonTargets=$(Join-Path $projectRoot 'packaging\RhythmPilot.targets')" `
     -o $updaterPublishDirectory
 if ($LASTEXITCODE -ne 0) {
     throw 'MFAUpdater self-contained publish failed.'
@@ -157,9 +179,21 @@ Remove-Item -LiteralPath $updaterPublishDirectory -Recurse -Force
 
 # Native 实时扩展被 .gitignore 忽略、不会进入 Git，但便携包必须内置；
 # 否则打开 Native 的便携环境会报 “No module named 'maabangdream_realtime'”。
-& (Join-Path $projectRoot 'scripts\build_native_realtime.ps1')
-if ($LASTEXITCODE -ne 0) {
-    throw 'Native realtime extension build failed.'
+if ($NativeExtension) {
+    $nativeChanges = @(& git -C $projectRoot diff v1.4.5 -- native/realtime)
+    if ($LASTEXITCODE -ne 0 -or $nativeChanges.Count -gt 0) {
+        throw 'Reusing the verified v1.4.5 native extension requires unchanged native sources.'
+    }
+    if (-not $NativeExtensionSha256 -or (Get-FileHash -LiteralPath $NativeExtension -Algorithm SHA256).Hash -ne $NativeExtensionSha256) {
+        throw 'Verified native extension SHA256 mismatch.'
+    }
+    New-Item -ItemType Directory -Force -Path (Join-Path $projectRoot 'agent\realtime\native') | Out-Null
+    Copy-Item -LiteralPath $NativeExtension -Destination (Join-Path $projectRoot 'agent\realtime\native\maabangdream_realtime.pyd') -Force
+} else {
+    & (Join-Path $projectRoot 'scripts\build_native_realtime.ps1') -Python $BuildPython
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Native realtime extension build failed.'
+    }
 }
 
 function Copy-ProjectFile {
@@ -190,11 +224,14 @@ Copy-ProjectFile -RelativePath 'agent\realtime\native\maabangdream_realtime.pyd'
 foreach ($relativePath in @(
     'docs\about.md',
     'docs\contact.md',
-    'docs\assets\maabangdream-logo-v1.png',
+    'docs\announcement.md',
+    'docs\assets\rhythmpilot-logo.png',
     'requirements.txt',
     'runtime-compatibility.json',
     'scripts\start-release.ps1',
     'scripts\normalize-release-directory.ps1',
+    'scripts\restart-release.ps1',
+    'scripts\cleanup_runtime_artifacts.py',
     'scripts\check_runtime.py',
     'scripts\sync_bestdori_catalog.py',
     'scripts\sync_bestdori_charts.py'
@@ -207,7 +244,7 @@ Copy-ProjectFile `
 Copy-ProjectFile -RelativePath 'interface.json'
 Copy-ProjectFile `
     -RelativePath 'packaging\start-maabangdream.cmd' `
-    -DestinationRelativePath '启动 MaaBanGDream.cmd'
+    -DestinationRelativePath '启动 RhythmPilot.cmd'
 Copy-ProjectFile `
     -RelativePath 'docs\release-package.md' `
     -DestinationRelativePath 'README.md'
@@ -235,6 +272,7 @@ Copy-Item `
 if (-not (Test-Path -LiteralPath $BuildPython -PathType Leaf)) {
     throw "Release build Python is missing: $BuildPython"
 }
+if (-not $RuntimeArchive) {
 $buildPythonEnvironment = Split-Path -Parent $BuildPython
 $condaPack = Join-Path $buildPythonEnvironment 'Scripts\conda-pack.exe'
 if (-not (Test-Path -LiteralPath $condaPack -PathType Leaf)) {
@@ -283,6 +321,16 @@ if ($LASTEXITCODE -ne 0) {
     )
 }
 
+} else {
+    if (-not $RuntimeArchiveSha256 -or (Get-FileHash -LiteralPath $RuntimeArchive -Algorithm SHA256).Hash -ne $RuntimeArchiveSha256) {
+        throw 'Verified portable Python archive SHA256 mismatch.'
+    }
+    $runtimeDirectory = Join-Path $packageRoot 'runtime'
+    $pythonArchive = Join-Path $runtimeDirectory 'maabangdream-python.zip'
+    New-Item -ItemType Directory -Force -Path $runtimeDirectory | Out-Null
+    Copy-Item -LiteralPath $RuntimeArchive -Destination $pythonArchive -Force
+}
+
 $maaCommit = (& git -C $projectRoot rev-parse HEAD).Trim()
 $mfaCommit = (& git -C $MfaSourceRoot rev-parse HEAD).Trim()
 $mfaBranch = (& git -C $MfaSourceRoot rev-parse --abbrev-ref HEAD).Trim()
@@ -290,7 +338,11 @@ $buildInfo = [ordered]@{
     package = $packageName
     version = $Version
     platform = 'win-x64'
-    maa_repository = 'https://github.com/coatcn1/MaaBanGDream'
+    maa_repository = 'https://github.com/woshiyigeanniu/YesBanGDream'
+    upstream_repository = 'https://github.com/coatcn1/MaaBanGDream'
+    upstream_baseline = 'v1.4.3'
+    upstream_synced = 'v1.4.5'
+    desktop_brand = 'RhythmPilot'
     maa_commit = $maaCommit
     mfa_repository = 'https://github.com/coatcn1/MFAAvalonia'
     mfa_branch = $mfaBranch
@@ -300,6 +352,13 @@ $buildInfo = [ordered]@{
     python = '3.12'
     python_runtime = 'conda-pack'
     dotnet_runtime = 'self-contained'
+    branding_targets_sha256 = (Get-FileHash -LiteralPath (Join-Path $projectRoot 'packaging\RhythmPilot.targets') -Algorithm SHA256).Hash.ToLowerInvariant()
+    mfa_upstream_commit = 'a39dcd87ba2e5098ee23072e9a015c5c36f8c8d1'
+    mfa_branding_patch_sha256 = (Get-FileHash -LiteralPath (Join-Path $projectRoot 'patches\rhythmpilot-mfa-branding.patch') -Algorithm SHA256).Hash.ToLowerInvariant()
+    native_extension_source = $(if ($NativeExtension) { 'verified-upstream-v1.4.5-binary' } else { 'built-from-source' })
+    native_extension_sha256 = (Get-FileHash -LiteralPath (Join-Path $packageRoot 'agent\realtime\native\maabangdream_realtime.pyd') -Algorithm SHA256).Hash.ToLowerInvariant()
+    python_archive_source = $(if ($RuntimeArchive) { 'verified-upstream-v1.4.5-runtime' } else { 'neutral-conda-pack-build' })
+    python_archive_sha256 = (Get-FileHash -LiteralPath $pythonArchive -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 $buildInfo | ConvertTo-Json -Depth 5 |
     Set-Content `

@@ -7,6 +7,8 @@ from agent.realtime import formal_preflight, live_visual_gate
 
 
 class Job:
+    succeeded = True
+
     def __init__(self, value=None):
         self.value = value
 

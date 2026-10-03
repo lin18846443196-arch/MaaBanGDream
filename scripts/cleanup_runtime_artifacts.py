@@ -225,13 +225,14 @@ def mfa_is_running(root: Path) -> bool:
     # denied access to its executable, retain its records instead of guessing.
     import psutil
 
-    expected = (root / "MFAAvalonia.exe").resolve()
+    host_names = {"mfaavalonia.exe", "maabangdream.exe", "rhythmpilot.exe"}
     for process in psutil.process_iter(["name", "exe"]):
         try:
-            if (process.info["name"] or "").casefold() != "mfaavalonia.exe":
+            name = (process.info["name"] or "").casefold()
+            if name not in host_names:
                 continue
             executable = process.info["exe"]
-            if executable is None or Path(executable).resolve() == expected:
+            if executable is None or Path(executable).resolve().parent == root.resolve():
                 return True
         except psutil.NoSuchProcess:
             continue

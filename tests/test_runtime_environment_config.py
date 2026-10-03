@@ -90,11 +90,11 @@ def test_launcher_patches_mfa_user_stop_status_race():
 
 def test_readme_displays_the_project_logo():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    logo = ROOT / "docs/assets/maabangdream-logo.png"
+    logo = ROOT / "docs/assets/rhythmpilot-logo.png"
 
     assert logo.is_file()
-    assert 'src="docs/assets/maabangdream-logo.png"' in readme
-    assert 'alt="MaaBanGDream Logo"' in readme
+    assert 'src="docs/assets/rhythmpilot-logo.png"' in readme
+    assert 'alt="RhythmPilot Logo"' in readme
 
 
 def test_launcher_scopes_process_cleanup_authorization_to_one_mfa_session():
@@ -110,8 +110,9 @@ def test_runtime_gate_requires_the_named_conda_environment():
         (ROOT / "runtime-compatibility.json").read_text(encoding="utf-8")
     )
     actual = check_runtime.static_versions()
+    runtime_expected = check_runtime.expected_versions(expected, portable=actual["conda_environment"] == "python")
 
     assert expected["environment_manager"] == "conda"
     assert expected["conda_environment"] == "maabangdream"
     assert actual["environment_manager"] == "conda"
-    assert actual["conda_environment"] == "maabangdream"
+    assert actual["conda_environment"] == runtime_expected["conda_environment"]

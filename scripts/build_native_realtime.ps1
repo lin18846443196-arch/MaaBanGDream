@@ -7,6 +7,7 @@
 # 用法：.\scripts\build_native_realtime.ps1 [-Clean]
 
 param(
+    [string]$Python,
     [switch]$Clean
 )
 
@@ -17,7 +18,7 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $workspaceRoot = Split-Path -Parent $repoRoot
 $condaRoot = Join-Path $workspaceRoot ".tools\Miniconda3"
 $nativeRoot = Join-Path $repoRoot "native\realtime"
-$python = Join-Path $condaRoot "envs\maabangdream\python.exe"
+if (-not $Python) { $Python = Join-Path $condaRoot "envs\maabangdream\python.exe" }
 $buildRoot = Join-Path $nativeRoot "build"
 $outputDir = Join-Path $repoRoot "agent\realtime\native"
 
@@ -50,6 +51,10 @@ function Invoke-NativeCommand {
 }
 
 if ($Clean -and (Test-Path $buildRoot)) {
+    $resolvedBuild = [IO.Path]::GetFullPath($buildRoot)
+    if (-not $resolvedBuild.StartsWith([IO.Path]::GetFullPath($nativeRoot).TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Native build directory escapes the source tree.'
+    }
     Remove-Item -Recurse -Force $buildRoot
 }
 New-Item -ItemType Directory -Force -Path $buildRoot | Out-Null

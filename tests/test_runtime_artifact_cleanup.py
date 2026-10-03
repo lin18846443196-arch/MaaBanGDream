@@ -230,6 +230,14 @@ class CleanupTests(PackageFixture):
         with patch.object(psutil, "process_iter", return_value=[current]):
             self.assertTrue(cleanup.mfa_is_running(self.root))
 
+    def test_branded_hosts_are_protected_during_migration(self):
+        import psutil
+        for name in ("RhythmPilot.exe", "MaaBanGDream.exe"):
+            with self.subTest(name=name):
+                process = Mock(info={"name": name, "exe": str(self.root / name)})
+                with patch.object(psutil, "process_iter", return_value=[process]):
+                    self.assertTrue(cleanup.mfa_is_running(self.root))
+
 
 class LauncherTests(PackageFixture):
     """Run the real launcher in a fake package; intercept GUI launch completely."""
@@ -238,7 +246,7 @@ class LauncherTests(PackageFixture):
         if os.name != "nt":
             self.skipTest("Windows release launcher")
         self.powershell = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
-        self.file("MFAAvalonia.exe", "dummy; never executed")
+        self.file("RhythmPilot.exe", "dummy; never executed")
         self.file("runtime/python/.maabangdream-ready", "ready")
         self.file("scripts/check_runtime.py", "# isolated compatibility stub")
         self.file("scripts/sync_bestdori_catalog.py", "# unused by launcher")

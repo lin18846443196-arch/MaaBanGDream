@@ -4,6 +4,8 @@ from agent import foreground_click
 
 
 class Job:
+    succeeded = True
+
     def __init__(self, value=None):
         self.value = value
 

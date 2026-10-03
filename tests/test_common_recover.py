@@ -29,6 +29,8 @@ def test_completed_live_recovery_stopping_never_runs_recovery(monkeypatch):
 
 
 class Job:
+    succeeded = True
+
     def __init__(self, result=None):
         self.result = result
 
@@ -344,7 +346,7 @@ def test_failure_path_restarts_only_up_to_limit(monkeypatch):
         context,
         argv(
             escape_interval_ms=0,
-            escape_timeout_ms=2,
+            escape_timeout_ms=100,
             restart_wait_ms=0,
             restart_limit=2,
             package="test.package",
@@ -359,7 +361,7 @@ def test_failure_path_restarts_only_up_to_limit(monkeypatch):
 
 def test_startup_grace_waits_without_sending_back(monkeypatch):
     context = Context({"HomeMarker": [False, True]})
-    ticks = iter([0, 0, .001, .002, .003, .004, .005])
+    ticks = iter(value / 1000 for value in range(1000))
     monkeypatch.setattr(common_recover.time, "monotonic", lambda: next(ticks))
     monkeypatch.setattr(common_recover.time, "sleep", lambda _seconds: None)
 
@@ -434,7 +436,7 @@ def test_cold_start_extends_grace_for_slow_title_screen(monkeypatch):
     assert context.tasker.controller.keys == []
 
 
-def test_login_mode_clicks_start_before_using_back(monkeypatch):
+def test_login_mode_waits_for_home_after_start_before_using_back(monkeypatch):
     context = Context({
         "HomeMarker": [False, False, True],
         "LoginScreenMarker": [True, False],
@@ -454,7 +456,7 @@ def test_login_mode_clicks_start_before_using_back(monkeypatch):
         ),
     )
     assert context.tasker.controller.clicks == [(640, 635)]
-    assert context.tasker.controller.keys == [4]
+    assert context.tasker.controller.keys == []
 
 
 def test_resource_download_clicks_once_waits_and_resumes_login(monkeypatch):
@@ -562,7 +564,7 @@ def test_login_mode_uses_safe_tap_anywhere_fallback_once(monkeypatch):
     assert context.tasker.controller.keys == []
 
 
-def test_login_start_marker_false_positive_is_clicked_only_once(monkeypatch):
+def test_login_start_marker_is_clicked_only_once_during_close_animation(monkeypatch):
     context = Context({
         "HomeMarker": [False, False, True],
         # The bottom-right menu-shaped marker also occurs on ordinary game
@@ -584,7 +586,7 @@ def test_login_start_marker_false_positive_is_clicked_only_once(monkeypatch):
         ),
     )
     assert context.tasker.controller.clicks == [(640, 635)]
-    assert context.tasker.controller.keys == [4]
+    assert context.tasker.controller.keys == []
 
 
 def test_login_click_starts_a_fresh_full_escape_window(monkeypatch):

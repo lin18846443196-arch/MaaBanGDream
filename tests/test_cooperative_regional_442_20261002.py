@@ -77,9 +77,8 @@ class DokusoushusaRegionalTests(unittest.TestCase):
         song = next(s for s in manifest["songs"] if s["bestdori_song_id"] == 442)
         song["difficulties"]["expert"]["chart_sha256"] = "f" * 64
         with patch.object(self.repo, "_load_manifest", return_value=manifest):
-            result = self.repo.resolve(self.fingerprint, "Expert", level=27)
-        self.assertIsNone(result.selection)
-        self.assertIn("level", result.reason)
+            with self.assertRaisesRegex(ValueError, "hash mismatch"):
+                self.repo.resolve(self.fingerprint, "Expert", level=27)
 
     def test_catalog_sync_retains_cn_level_without_changing_global_level(self):
         for server, expected in (("cn", 27), ("jp", 28)):

@@ -1,3 +1,4 @@
-- 源码仓库：[GitHub](https://github.com/coatcn1/MaaBanGDream)
-- 使用说明：[README](https://github.com/coatcn1/MaaBanGDream#readme)
-- 问题反馈：[GitHub Issues](https://github.com/coatcn1/MaaBanGDream/issues)
+- 源码仓库：[GitHub](https://github.com/woshiyigeanniu/YesBanGDream)
+- 使用说明：[README](https://github.com/woshiyigeanniu/YesBanGDream#readme)
+- 问题反馈：[GitHub Issues](https://github.com/woshiyigeanniu/YesBanGDream/issues)
+- 上游项目：[MaaBanGDream](https://github.com/coatcn1/MaaBanGDream)
