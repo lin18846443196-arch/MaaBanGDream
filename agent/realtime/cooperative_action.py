@@ -20,13 +20,11 @@ from maa.custom_action import CustomAction
 
 try:
     from ..common_recover import CommonRecover
-    from ..capture_transition import wait_for_game_capture_ready
     from ..foreground_guard import GAME_PACKAGE, foreground_package, require_game_foreground
     from ..screen_refresh import ScreenRefreshCancelled, capture_image
     from ..task_reporting import TaskProgress, latest_failure_reason, record_failure_reason
 except ImportError:
     from common_recover import CommonRecover
-    from capture_transition import wait_for_game_capture_ready
     from foreground_guard import GAME_PACKAGE, foreground_package, require_game_foreground
     from screen_refresh import ScreenRefreshCancelled, capture_image
     from task_reporting import TaskProgress, latest_failure_reason, record_failure_reason
@@ -82,6 +80,7 @@ TEMPLATE_POSITIONS = {
     "song_unspecified": (690, 612),
     "song_random": (690, 528),
     "ready_button": (1010, 575),
+    "ready_cancel_button": (1050, 600),
     "member_exit_title": (399, 158),
     "connect_failed_body": (580, 345),
     "connect_failed_retry": (660, 500),
@@ -679,7 +678,6 @@ class CooperativeLiveFlow:
             self.controller.post_click_key(3).wait()
             time.sleep(0.6)
             self.controller.post_start_app(GAME_PACKAGE).wait()
-            wait_for_game_capture_ready(self.context)
             if not self._wait_and_click(
                 "disconnect_continue_body",
                 DISCONNECT_CONTINUE_INTERRUPT_POINT,
@@ -1264,6 +1262,13 @@ class CooperativeLiveFlow:
             reject_member_loading=cooperative_member_loading_guard_enabled(),
         )
 
+    def preparation_controls_visible(self, image: np.ndarray) -> bool:
+        """准备和取消按钮属于成员卡片页，不能作为演奏场动态证据。"""
+        return any(
+            self.visible(image, name, 0.93)
+            for name in ("ready_cancel_button", "ready_button")
+        )
+
     def watch_member_exit_before_black(
         self,
         timeout: float = MEMBER_DOWNLOAD_TIMEOUT_SECONDS,
@@ -1290,6 +1295,8 @@ class CooperativeLiveFlow:
         self._ready_delivery_image = None
         capture_count = 0
         capture_max_ms = 0.0
+        preparation_frame_count = 0
+        cover_observed_since_preparation = False
         recent_frames = deque(maxlen=8)
 
         def finish(outcome: str) -> str:
@@ -1299,6 +1306,7 @@ class CooperativeLiveFlow:
                 f"outcome={outcome} elapsed_ms={elapsed_ms:.1f} "
                 f"capture_node=CooperativeStartupRefreshScreen "
                 f"capture_count={capture_count} capture_max_ms={capture_max_ms:.1f} "
+                f"preparation_frame_count={preparation_frame_count} "
                 f"timeout_s={float(timeout):.3f}",
                 flush=True,
             )
@@ -1324,7 +1332,19 @@ class CooperativeLiveFlow:
                 finish("member-exit")
                 self.dismiss_member_exit()
                 raise MemberExited("协力成员退出房间")
+            if self.preparation_controls_visible(image):
+                # 准备后的成员卡片动画会同时误中判定线、音符头和窄列变化。
+                # 按钮还在时只被动等待；离开准备页后必须重新积累动态证据。
+                self.playfield_entry_evidence.reset()
+                preparation_frame_count += 1
+                if cover_observed_since_preparation:
+                    # 返回准备页会中断最终封面的连续候选，禁止跨页确认。
+                    final_cover_resolver = self.make_final_cover_entry_resolver()
+                    cover_observed_since_preparation = False
+                time.sleep(0.02)
+                continue
             if final_cover_resolver is not None:
+                cover_observed_since_preparation = True
                 cover_resolution = final_cover_resolver.observe(image)
                 if cover_resolution is not None:
                     update_live_run(
@@ -1450,7 +1470,6 @@ class CooperativeLiveFlow:
         self.controller.post_click_key(3).wait()
         time.sleep(0.6)
         self.controller.post_start_app(GAME_PACKAGE).wait()
-        wait_for_game_capture_ready(self.context)
         deadline = time.monotonic() + 12.0
         foreground_confirmed = False
         while time.monotonic() < deadline:
@@ -1531,7 +1550,6 @@ class CooperativeLiveFlow:
             started = self.controller.post_start_app(GAME_PACKAGE).wait()
             if not started.succeeded:
                 raise JumpOutUnavailable("协力失败后游戏重启失败，停止自动重试")
-            wait_for_game_capture_ready(self.context)
             time.sleep(2.0)
         print("CooperativeLive failed_round_exited=true retry_pending=true", flush=True)
 

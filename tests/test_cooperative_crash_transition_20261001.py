@@ -1,151 +1,63 @@
-"""Replay MuMu startup transitions without invoking its native renderer."""
+"""MuMu 前台恢复不重复唤起游戏；协力仍先恢复旧断网规则。"""
 import json
 import unittest
 from types import SimpleNamespace as NS
 from unittest.mock import Mock, patch
 
-from test_team_live import ROOT, Clock
-import capture_transition as ct
+from test_team_live import ROOT
+from test_common_recover import Context as RecoveryContext, argv as recovery_args
 import task_reporting as reporting
 import common_recover as cr
+from foreground_guard import GAME_PACKAGE
 from realtime import cooperative_action as ca
 
-PACKAGE = ct.GAME_PACKAGE
+PACKAGE = GAME_PACKAGE
 
 
-def window(display=2, focus=PACKAGE):
-    return (f"  Display: mDisplayId={display} (organized)\n"
-            f"  mCurrentFocus=Window{{x u0 {focus}/.MainActivity}}\n"
-            f"  mFocusedApp=ActivityRecord{{x u0 {focus}/.MainActivity}}\n"
-            "  Display: mDisplayId=0 (organized)\n"
-            "  mCurrentFocus=Window{x u0 app.lawnchair/.Launcher}\n"
-            "  mTopFocusedDisplayId=0\n")
-
-
-def activity(display=2):
-    return (f"Display #{display} (activities from top to bottom):\n"
-            f"  topResumedActivity=ActivityRecord{{x u0 {PACKAGE}/.MainActivity}}\n")
-
-
-def dimensions(display=2, width=1280, height=720):
-    return (f'mBaseDisplayInfo=DisplayInfo{{"screen", displayId {display}, real 720 x 1280}}\n'
-            f'mOverrideDisplayInfo=DisplayInfo{{"screen", displayId {display}, real {width} x {height}}}\n')
-
-
-class CaptureTransitionTests(unittest.TestCase):
+class PassiveForegroundRecoveryTests(unittest.TestCase):
     def setUp(self):
-        self.clock = Clock()
         self.context = NS(tasker=NS(stopping=False, controller=Mock()))
-        self.addCleanup(patch.stopall)
-        patch.object(ct.time, "monotonic", self.clock.time).start()
-        patch.object(ct.time, "sleep", self.clock.advance).start()
+        self.context.tasker.controller.info = {
+            "config": {"extras": {"mumu": {"enable": True}}},
+            "screencap_methods": 64,
+        }
 
-    def probe(self, *, window_fn=None, activity_fn=None, dimensions_fn=None):
-        commands = []
-        def shell(controller, command, timeout):
-            commands.append(command)
-            if command == "dumpsys window":
-                return (window_fn or (lambda: window()))()
-            if command == "dumpsys activity activities":
-                return (activity_fn or (lambda: activity()))()
-            return (dimensions_fn or (lambda: dimensions()))()
-        with patch.object(ct, "mumu_extras_active", return_value=True), \
-             patch.object(ct, "shell_output", side_effect=shell):
-            ct.wait_for_game_capture_ready(self.context, timeout_seconds=1.5)
-        self.context.tasker.controller.post_screencap.assert_not_called()
-        self.context.tasker.controller.post_click.assert_not_called()
-        self.assertTrue(all(command.startswith("dumpsys ") for command in commands))
-
-    def test_portrait_game_must_rotate_and_remain_stable_before_capture(self):
-        self.probe(dimensions_fn=lambda: dimensions(width=720, height=1280)
-                   if self.clock.now < .3 else dimensions())
-        self.assertGreaterEqual(self.clock.now, .8)
-
-    def test_desktop_landscape_without_game_is_never_ready(self):
-        with self.assertRaisesRegex(RuntimeError, "暂停截图"):
-            self.probe(window_fn=lambda: window(focus="app.lawnchair"))
-        self.assertLess(self.clock.now, 1.7)
-
-    def test_overlay_on_game_display_blocks_capture(self):
-        with self.assertRaises(RuntimeError):
-            self.probe(window_fn=lambda: window(focus="com.android.permissioncontroller"))
-
-    def test_top_focused_virtual_game_without_resumed_evidence_blocks_capture(self):
-        with self.assertRaises(RuntimeError):
-            self.probe(window_fn=lambda: window().replace("mTopFocusedDisplayId=0", "mTopFocusedDisplayId=2"),
-                       activity_fn=lambda: "")
-
-    def test_top_focused_virtual_game_with_ambiguous_panels_blocks_capture(self):
-        extra = f"  Display: mDisplayId=3 (organized)\n  mCurrentFocus=Window{{x u0 {PACKAGE}/.MainActivity}}\n"
-        with self.assertRaises(RuntimeError):
-            self.probe(window_fn=lambda: window().replace("mTopFocusedDisplayId=0", "mTopFocusedDisplayId=2") + extra,
-                       activity_fn=lambda: activity(2) + activity(3))
-
-    def test_standard_display_game_can_use_explicit_global_focus(self):
-        self.probe(window_fn=lambda: f"  mCurrentFocus=Window{{x u0 {PACKAGE}/.MainActivity}}\n  mTopFocusedDisplayId=0\n",
-                   activity_fn=lambda: "", dimensions_fn=lambda: dimensions(0))
-
-    def test_unscoped_game_focus_cannot_assume_standard_display(self):
-        with self.assertRaises(RuntimeError):
-            self.probe(window_fn=lambda: f"  mCurrentFocus=Window{{x u0 {PACKAGE}/.MainActivity}}\n",
-                       activity_fn=lambda: "", dimensions_fn=lambda: dimensions(0))
-
-    def test_other_display_dimensions_do_not_prove_game_is_landscape(self):
-        with self.assertRaises(RuntimeError):
-            self.probe(dimensions_fn=lambda: dimensions(4))
-
-    def test_changing_game_display_restarts_stability_wait(self):
-        display = lambda: 2 if self.clock.now < .45 else 3
-        self.probe(window_fn=lambda: window(display()),
-                   activity_fn=lambda: activity(display()),
-                   dimensions_fn=lambda: dimensions(display()))
-        self.assertGreaterEqual(self.clock.now, .95)
-
-    def test_landscape_resolution_change_restarts_stability_wait(self):
-        self.probe(dimensions_fn=lambda: dimensions() if self.clock.now < .45
-                   else dimensions(width=1920, height=1080))
-        self.assertGreaterEqual(self.clock.now, .95)
-
-    def test_failed_shell_cannot_fall_through_to_renderer(self):
-        with patch.object(ct, "mumu_extras_active", return_value=True), \
-             patch.object(ct, "shell_output", side_effect=RuntimeError("transport unavailable")):
-            with self.assertRaisesRegex(RuntimeError, "transport unavailable"):
-                ct.wait_for_game_capture_ready(self.context, timeout_seconds=.3)
-        self.context.tasker.controller.post_screencap.assert_not_called()
-
-    def test_stopping_during_transition_is_preserved(self):
-        self.context.tasker.stopping = True
-        with patch.object(ct, "mumu_extras_active", return_value=True), \
-             patch.object(ct, "shell_output") as shell:
-            with self.assertRaises(InterruptedError):
-                ct.wait_for_game_capture_ready(self.context)
-        shell.assert_not_called()
-
-    def test_non_mumu_capture_methods_get_no_added_delay_or_queries(self):
-        with patch.object(ct, "mumu_extras_active", return_value=False), \
-             patch.object(ct, "shell_output") as shell:
-            self.assertTrue(ct.wait_for_game_capture_ready(self.context))
-        shell.assert_not_called()
-        self.assertEqual(self.clock.now, 0.)
-
-    def test_logical_override_wins_over_portrait_physical_panel(self):
-        self.assertTrue(ct.display_is_landscape(dimensions(), 2))
-        self.assertFalse(ct.display_is_landscape(dimensions(width=720, height=1280), 2))
-
-    def test_resumed_mumu_game_sets_renderer_app_target_before_capture(self):
+    def test_foreground_mumu_game_is_not_started_again(self):
         with patch.object(cr, "_package_running", return_value=True), \
-             patch.object(cr, "foreground_package", return_value=PACKAGE), \
-             patch.object(cr, "mumu_extras_active", return_value=True):
-            self.assertEqual(cr._prepare_game(self.context, PACKAGE), (True, True))
-        self.context.tasker.controller.post_start_app.assert_called_once_with(PACKAGE)
+             patch.object(cr, "foreground_package", return_value=PACKAGE):
+            self.assertEqual(cr._prepare_game(self.context, PACKAGE), (True, False))
+        self.context.tasker.controller.post_start_app.assert_not_called()
+        self.context.tasker.controller.post_stop_app.assert_not_called()
 
-    def test_recovery_cancellation_at_capture_transition_is_not_failure(self):
-        def stop(*args):
-            self.context.tasker.stopping = True
-            raise InterruptedError("stop")
-        with patch.object(cr, "_prepare_game", return_value=(True, True)), \
-             patch.object(cr, "wait_for_game_capture_ready", side_effect=stop):
-            self.assertTrue(cr.CommonRecover().run(self.context, NS(custom_action_param="{}")))
+    def test_background_game_and_missing_process_still_start_normally(self):
+        for running, foreground in ((True, "app.lawnchair"), (False, None), (None, None)):
+            with self.subTest(running=running, foreground=foreground), \
+                 patch.object(cr, "_package_running", return_value=running), \
+                 patch.object(cr, "foreground_package", return_value=foreground):
+                self.context.tasker.controller.post_start_app.reset_mock()
+                self.assertEqual(cr._prepare_game(self.context, PACKAGE), (True, True))
+                self.context.tasker.controller.post_start_app.assert_called_once_with(PACKAGE)
+
+    def test_home_recovery_uses_current_mumu_frame_without_launch_or_geometry_poll(self):
+        context = RecoveryContext({"HomeMarker": [True]})
+        context.tasker.controller.info = self.context.tasker.controller.info
+        with patch.object(context.tasker.controller, "post_shell",
+                          wraps=context.tasker.controller.post_shell) as shell:
+            self.assertTrue(cr.CommonRecover().run(context, recovery_args()))
+        self.assertEqual(context.refreshes, 1)
+        self.assertEqual(context.tasker.controller.starts, [])
+        self.assertEqual(context.tasker.controller.stops, [])
+        self.assertEqual(context.tasker.controller.keys, [])
+        self.assertTrue(all(call.args[0] != "dumpsys display" for call in shell.call_args_list))
+
+    def test_user_stop_prevents_foreground_and_background_launch(self):
+        self.context.tasker.stopping = True
+        for foreground in (PACKAGE, "app.lawnchair"):
+            with self.subTest(foreground=foreground), \
+                 patch.object(cr, "_package_running", return_value=True), \
+                 patch.object(cr, "foreground_package", return_value=foreground):
+                self.assertEqual(cr._prepare_game(self.context, PACKAGE), (False, False))
+        self.context.tasker.controller.post_start_app.assert_not_called()
 
 
 class CooperativeStartupRestoreTests(unittest.TestCase):

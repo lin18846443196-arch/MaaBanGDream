@@ -6,12 +6,14 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from .profile_defaults import seed_default_profiles
     from .realtime.profile_store import (
         EnvironmentSignature,
         RealtimeProfileStore,
         engine_from_native_flag,
     )
 except ImportError:
+    from profile_defaults import seed_default_profiles
     from realtime.profile_store import (
         EnvironmentSignature,
         RealtimeProfileStore,
@@ -41,6 +43,7 @@ def _public(profile: dict[str, Any], signature: EnvironmentSignature | None) -> 
 def handle_request(request: dict[str, Any], *, root: str | Path = PROJECT_ROOT / "profiles") -> dict[str, Any]:
     if not isinstance(request, dict):
         raise ValueError("请求必须是 JSON 对象")
+    seed_default_profiles(PROJECT_ROOT / "default-profiles", Path(root))
     store = RealtimeProfileStore(root)
     operation = request.get("operation")
     if operation == "pin":
@@ -105,7 +108,9 @@ def main() -> int:
         response, code = {"ok": True, "result": handle_request(request)}, 0
     except (OSError, ValueError, TypeError) as exc:
         response, code = {"ok": False, "error": str(exc)}, 1
-    sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
+    # GUI 直接启动时的默认编码可能与 Python 不同；标准 Unicode 转义让通信
+    # 只包含 ASCII，避免中文尾字被误解码后吞掉 JSON 引号，界面仍显示原文。
+    sys.stdout.write(json.dumps(response, ensure_ascii=True) + "\n")
     return code
 
 

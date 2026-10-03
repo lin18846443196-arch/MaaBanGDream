@@ -144,13 +144,13 @@ def test_release_builder_uses_clean_sources_and_excludes_private_state():
             assert private_name in validator
 
 
-def test_seed_profiles_are_pinned_and_free_of_machine_paths():
+def test_seed_profiles_use_engine_matching_and_are_free_of_machine_paths():
     profiles_dir = ROOT / "packaging" / "profiles"
     assert profiles_dir.is_dir()
     selection = json.loads(
         (profiles_dir / "selection.json").read_text(encoding="utf-8")
     )
-    assert selection["pinned"]["Expert"] == "expert-20260905233716.json"
+    assert selection["pinned"] == {}
     for path in profiles_dir.glob("*.json"):
         text = path.read_text(encoding="utf-8")
         for marker in (r"E:\game", r"D:\Documents", r"C:\Users"):

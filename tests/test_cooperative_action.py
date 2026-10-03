@@ -166,7 +166,6 @@ def _fake_jump_flow(
     flow._wait_and_click = lambda name, point, *_args, **_kwargs: (
         (clicks.append(point), True)[1] if visible_results.get(name, False) else False
     )
-    monkeypatch.setattr(cooperative_action, "wait_for_game_capture_ready", lambda _context: None)
 
     class Gate:
         def __init__(self, shell):

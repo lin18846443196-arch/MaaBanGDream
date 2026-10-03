@@ -396,7 +396,18 @@ if (Test-Path -LiteralPath $seedProfiles -PathType Container) {
     $packageProfiles = Join-Path $packageRoot 'profiles'
     New-Item -ItemType Directory -Force -Path $packageProfiles | Out-Null
     Copy-Item -Path (Join-Path $seedProfiles '*') -Destination $packageProfiles -Force
+    # 更新器保护 profiles 整个目录；独立种子目录通过启动流程只补缺失文件。
+    $defaultProfiles = Join-Path $packageRoot 'default-profiles'
+    New-Item -ItemType Directory -Force -Path $defaultProfiles | Out-Null
+    Copy-Item -Path (Join-Path $seedProfiles '*') -Destination $defaultProfiles -Force
 }
+
+# 校准文件同时作为独立 Release 附件，便于现有安装手动导入。
+$profileZip = Join-Path $outputFull "YesBanGDream-v$Version-Expert-profiles.zip"
+& $BuildPython $zipBuilder --source $seedProfiles --output $profileZip
+if ($LASTEXITCODE -ne 0) { throw 'Unable to create Expert Profile ZIP.' }
+$profileHash = (Get-FileHash -LiteralPath $profileZip -Algorithm SHA256).Hash
+[System.IO.File]::WriteAllText("$profileZip.sha256", "$profileHash  $([IO.Path]::GetFileName($profileZip))`r`n", [System.Text.UTF8Encoding]::new($false))
 
 # 版本依据清单：version 是更新器判断本地版本、后续版本号的唯一来源；
 # files（相对路径 -> SHA256）保留作包内容诊断，不再参与逐文件增量 diff。

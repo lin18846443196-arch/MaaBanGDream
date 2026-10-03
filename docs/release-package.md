@@ -55,6 +55,8 @@ Windows 不支持透明效果或关闭系统透明效果时，更新器使用实
 
 ## 注意事项
 
+- 2.0.1 随包提供 Legacy / Native Expert 两份已验收 Profile（1280×720、DPI 240、60 FPS、standard、流速 5.0、偏移 60 ms）。新安装默认 Legacy、自动按环境匹配；已有钉选保留，切换引擎时请选择对应文件。
+- 更新启动时从 `default-profiles/` 只补缺失校准，不覆盖已有 Profile 或 `selection.json`。独立 `Expert-profiles.zip` 可手动导入；已有安装只复制需要的 Profile JSON，保留原选择状态。
 - MFA/MaaBanGDream 与 ALAS 等其他模拟器自动化工具不能同时运行。
 - 实时演奏 Profile 与分辨率、DPI、帧率、画质、音符流速绑定；任一设置变化后
   必须重新校准。
