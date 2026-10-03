@@ -1,0 +1,257 @@
+{
+  "TeamRefreshScreen": {
+    "recognition": "DirectHit",
+    "action": "DoNothing",
+    "pre_delay": 0,
+    "post_delay": 0
+  },
+  "TeamLive": {
+    "recognition": "DirectHit",
+    "action": "DoNothing",
+    "next": [
+      "TeamProcessConflictGuard"
+    ],
+    "on_error": [
+      "TeamFailure"
+    ]
+  },
+  "TeamProcessConflictGuard": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "ProcessConflictGuard",
+    "custom_action_param": {},
+    "next": [
+      "TeamResetConfigure"
+    ],
+    "on_error": [
+      "TeamFailure"
+    ]
+  },
+  "TeamResetConfigure": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "TeamLiveConfigure",
+    "custom_action_param": {
+      "reset": true
+    },
+    "next": [
+      "TeamDifficultyConfigure"
+    ],
+    "on_error": [
+      "TeamFailure"
+    ]
+  },
+  "TeamDifficultyConfigure": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "TeamLiveConfigure",
+    "custom_action_param": {
+      "difficulty": "Expert"
+    },
+    "next": [
+      "TeamCountConfigure"
+    ],
+    "on_error": [
+      "TeamFailure"
+    ]
+  },
+  "TeamCountConfigure": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "TeamLiveConfigure",
+    "custom_action_param": {
+      "count": 1
+    },
+    "next": [
+      "TeamWaitConfigure"
+    ],
+    "on_error": [
+      "TeamFailure"
+    ]
+  },
+  "TeamWaitConfigure": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "TeamLiveConfigure",
+    "custom_action_param": {
+      "wait_timeout_seconds": 180
+    },
+    "next": [
+      "TeamRetryConfigure"
+    ],
+    "on_error": [
+      "TeamFailure"
+    ]
+  },
+  "TeamRetryConfigure": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "TeamLiveConfigure",
+    "custom_action_param": {
+      "max_retries": 2
+    },
+    "next": [
+      "TeamDebugConfigure"
+    ],
+    "on_error": [
+      "TeamFailure"
+    ]
+  },
+  "TeamDebugConfigure": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "TeamLiveConfigure",
+    "custom_action_param": {
+      "debug_recording": false,
+      "diagnostic_trace": true
+    },
+    "next": [
+      "TeamRun"
+    ],
+    "on_error": [
+      "TeamFailure"
+    ]
+  },
+  "TeamRun": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "TeamLiveFlow",
+    "custom_action_param": {},
+    "next": [
+      "TeamComplete"
+    ],
+    "on_error": [
+      "TeamFailure"
+    ],
+    "focus": {
+      "Node.Action.Starting": {
+        "content": "正在执行团队普通匹配；等待自动满员开演",
+        "display": [
+          "log"
+        ]
+      },
+      "Node.Action.Failed": {
+        "content": "团队演出未完成，请查看具体失败原因",
+        "display": [
+          "log",
+          "toast"
+        ]
+      }
+    }
+  },
+  "TeamComplete": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "TaskOutcome",
+    "custom_action_param": {
+      "task_name": "TeamLive",
+      "label": "团队演出",
+      "status": "success",
+      "reason": "已完成指定次数的团队演出并返回主页"
+    }
+  },
+  "TeamFailure": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "TaskOutcome",
+    "custom_action_param": {
+      "task_name": "TeamLive",
+      "label": "团队演出",
+      "status": "failure",
+      "reason": "团队演出流程未完成",
+      "reason_source": "latest"
+    }
+  },
+  "TeamHomeMarker": {
+    "recognition": "And",
+    "all_of": ["TeamHomeBand", "TeamHomeLive"],
+    "action": "DoNothing"
+  },
+  "TeamHomeBand": {
+    "recognition": "TemplateMatch",
+    "template": "team/home_band.png",
+    "roi": [805, 613, 91, 92],
+    "threshold": 0.9,
+    "action": "DoNothing"
+  },
+  "TeamHomeLive": {
+    "recognition": "TemplateMatch",
+    "template": "team/home_live.png",
+    "roi": [1094, 586, 152, 115],
+    "threshold": 0.9,
+    "action": "DoNothing"
+  },
+  "TeamNavigationClose": {
+    "recognition": "TemplateMatch",
+    "template": "common_close.png",
+    "threshold": 0.9,
+    "action": "DoNothing"
+  },
+  "TeamPrepareTitle": {
+    "recognition": "TemplateMatch",
+    "template": "team/prepare.png",
+    "threshold": 0.91,
+    "action": "DoNothing",
+    "roi": [
+      122,
+      50,
+      142,
+      41
+    ]
+  },
+  "TeamCutInOff": {
+    "recognition": "TemplateMatch",
+    "template": "team/cut_in_off.png",
+    "threshold": 0.94,
+    "action": "DoNothing",
+    "roi": [
+      477,
+      629,
+      43,
+      43
+    ]
+  },
+  "TeamLiveSelectMarker": {
+    "recognition": "OCR",
+    "expected": [
+      "选择演出"
+    ],
+    "roi": [
+      80,
+      35,
+      300,
+      65
+    ],
+    "action": "DoNothing"
+  },
+  "TeamEntryOCR": {
+    "recognition": "OCR",
+    "expected": [
+      "团队演出"
+    ],
+    "roi": [
+      790,
+      200,
+      430,
+      230
+    ],
+    "action": "DoNothing"
+  },
+  "TeamRoomError": {
+    "recognition": "OCR",
+    "expected": [
+      "房间.*解散",
+      "匹配.*失败",
+      "募集.*超时",
+      "成员.*退出",
+      "退出.*房间"
+    ],
+    "roi": [
+      295,
+      260,
+      700,
+      195
+    ],
+    "action": "DoNothing"
+  }
+}

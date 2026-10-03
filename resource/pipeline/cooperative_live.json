@@ -18,15 +18,21 @@
     "recognition": "DirectHit",
     "action": "Custom",
     "custom_action": "ProcessConflictGuard",
-    "next": ["CooperativeRecover"],
+    "next": ["CooperativeEntryConfigure"],
     "on_error": ["CooperativeFailure"]
   },
   "CooperativeRecover": {
     "recognition": "DirectHit",
     "action": "Custom",
-    "custom_action": "CommonRecover",
+    "custom_action": "CooperativeLiveRecover",
     "custom_action_param": {
       "home_node": "CooperativeHomeMarker",
+      "modal_retry_nodes": ["CooperativeConnectFailedRetry"],
+      "modal_retry_presence_nodes": ["CooperativeConnectFailedBody"],
+      "modal_retry_limit": 5,
+      "modal_retry_interval_ms": 1000,
+      "modal_retry_min_brightness": 220,
+      "modal_retry_evidence_enabled": true,
       "modal_cancel_nodes": ["QuitConfirmCancel"],
       "click_nodes": [
         "AutoLiveLoginTap",
@@ -49,7 +55,7 @@
       "package": "com.bilibili.star.bili",
       "login_tap_target": [640, 360]
     },
-    "next": ["CooperativeEntryConfigure"],
+    "next": ["CooperativeSpeedSettingsGate"],
     "on_error": ["CooperativeFailure"]
   },
   "CooperativeEntryConfigure": {
@@ -126,7 +132,7 @@
     "custom_action_param": {
       "disconnect_jump_enabled": false
     },
-    "next": ["CooperativeSpeedSettingsGate"],
+    "next": ["CooperativeRecover"],
     "on_error": ["CooperativeFailure"]
   },
   "CooperativeSpeedSettingsGate": {
@@ -170,6 +176,32 @@
         "display": ["log"]
       }
     }
+  },
+  "CooperativeRestrictionCountdown": {
+    "recognition": "OCR",
+    "roi": [300, 385, 670, 45],
+    "expected": ["功能限制剩余时间"],
+    "action": "DoNothing"
+  },
+  "CooperativeConnectFailedBody": {
+    "recognition": "TemplateMatch",
+    "template": "cooperative/connect_failed_body.png",
+    "roi": [580, 345, 105, 25],
+    "threshold": 0.9,
+    "action": "DoNothing"
+  },
+  "CooperativeConnectFailedRetryButton": {
+    "recognition": "TemplateMatch",
+    "template": "cooperative/connect_failed_retry.png",
+    "roi": [660, 500, 218, 53],
+    "threshold": 0.9,
+    "action": "DoNothing"
+  },
+  "CooperativeConnectFailedRetry": {
+    "recognition": "And",
+    "all_of": ["CooperativeConnectFailedRetryButton", "CooperativeConnectFailedBody"],
+    "box_index": 0,
+    "action": "DoNothing"
   },
   "CooperativeNavigationClose": {
     "recognition": "TemplateMatch",
@@ -246,6 +278,12 @@
     "custom_action": "CooperativeLiveFinalize",
     "custom_action_param": {
       "home_node": "CooperativeHomeMarker",
+      "modal_retry_nodes": ["CooperativeConnectFailedRetry"],
+      "modal_retry_presence_nodes": ["CooperativeConnectFailedBody"],
+      "modal_retry_limit": 5,
+      "modal_retry_interval_ms": 1000,
+      "modal_retry_min_brightness": 220,
+      "modal_retry_evidence_enabled": true,
       "modal_cancel_nodes": ["QuitConfirmCancel"],
       "click_nodes": [],
       "back_only_click_nodes": [

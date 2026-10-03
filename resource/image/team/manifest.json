@@ -1,0 +1,367 @@
+{
+  "resolution": [
+    1280,
+    720
+  ],
+  "recording": "manual-flow-general-20260922-230248-893061",
+  "templates": {
+    "home_band": {
+      "file": "home_band.png",
+      "roi": [
+        811,
+        619,
+        79,
+        80
+      ],
+      "threshold": 0.91,
+      "source": "home-circle.png"
+    },
+    "home_live": {
+      "file": "home_live.png",
+      "roi": [
+        1100,
+        592,
+        140,
+        103
+      ],
+      "threshold": 0.91,
+      "source": "home-circle.png"
+    },
+    "activity_reward": {
+      "file": "activity_reward.png",
+      "roi": [
+        398,
+        136,
+        118,
+        31
+      ],
+      "threshold": 0.91,
+      "source": "activity-reward.png"
+    },
+    "activity_reward_ok": {
+      "file": "activity_reward_ok.png",
+      "roi": [
+        600,
+        522,
+        80,
+        41
+      ],
+      "threshold": 0.91,
+      "source": "activity-reward.png"
+    },
+    "network_unavailable": {
+      "file": "network_unavailable.png",
+      "roi": [
+        453,
+        318,
+        368,
+        61
+      ],
+      "threshold": 0.91,
+      "source": "network-unavailable.png"
+    },
+    "network_ok": {
+      "file": "network_ok.png",
+      "roi": [
+        590,
+        510,
+        98,
+        36
+      ],
+      "threshold": 0.91,
+      "source": "network-unavailable.png"
+    },
+    "entry": {
+      "file": "entry.png",
+      "roi": [
+        995,
+        306,
+        151,
+        37
+      ],
+      "threshold": 0.91,
+      "source": "frame-008.000s.png"
+    },
+    "home": {
+      "file": "home.png",
+      "roi": [
+        128,
+        53,
+        230,
+        34
+      ],
+      "threshold": 0.91,
+      "source": "frame-012.000s.png"
+    },
+    "normal_selected": {
+      "file": "normal_selected.png",
+      "roi": [
+        982,
+        156,
+        78,
+        32
+      ],
+      "threshold": 0.91,
+      "source": "frame-012.000s.png"
+    },
+    "home_ok": {
+      "file": "home_ok.png",
+      "roi": [
+        990,
+        628,
+        112,
+        36
+      ],
+      "threshold": 0.91,
+      "source": "frame-012.000s.png"
+    },
+    "lobby": {
+      "file": "lobby.png",
+      "roi": [
+        654,
+        583,
+        138,
+        23
+      ],
+      "threshold": 0.91,
+      "source": "frame-022.000s.png"
+    },
+    "full": {
+      "file": "full.png",
+      "roi": [
+        550,
+        559,
+        163,
+        36
+      ],
+      "threshold": 0.91,
+      "source": "frame-023.000s.png"
+    },
+    "matching": {
+      "file": "matching.png",
+      "roi": [
+        128,
+        58,
+        63,
+        26
+      ],
+      "threshold": 0.91,
+      "source": "frame-025.062s.png"
+    },
+    "random_song": {
+      "file": "random_song.png",
+      "roi": [
+        129,
+        56,
+        110,
+        28
+      ],
+      "threshold": 0.91,
+      "source": "frame-030.062s.png"
+    },
+    "prepare": {
+      "file": "prepare.png",
+      "roi": [
+        128,
+        56,
+        130,
+        29
+      ],
+      "threshold": 0.91,
+      "source": "frame-035.000s.png"
+    },
+    "ready": {
+      "file": "ready.png",
+      "roi": [
+        1040,
+        629,
+        166,
+        35
+      ],
+      "threshold": 0.91,
+      "source": "frame-035.000s.png"
+    },
+    "cancel_ready": {
+      "file": "cancel_ready.png",
+      "roi": [
+        1083,
+        629,
+        73,
+        35
+      ],
+      "threshold": 0.91,
+      "source": "frame-043.000s.png"
+    },
+    "loading": {
+      "file": "loading.png",
+      "roi": [
+        277,
+        650,
+        700,
+        30
+      ],
+      "threshold": 0.91,
+      "source": "frame-047.062s.png"
+    },
+    "connect_error": {
+      "file": "connect_error.png",
+      "roi": [
+        544,
+        317,
+        190,
+        62
+      ],
+      "threshold": 0.91,
+      "source": "frame-051.062s.png"
+    },
+    "retry": {
+      "file": "retry.png",
+      "roi": [
+        578,
+        508,
+        115,
+        34
+      ],
+      "threshold": 0.91,
+      "source": "frame-051.062s.png"
+    },
+    "team_result": {
+      "file": "team_result.png",
+      "roi": [
+        120,
+        432,
+        86,
+        26
+      ],
+      "threshold": 0.91,
+      "source": "frame-186.000s.png"
+    },
+    "pggbm": {
+      "file": "pggbm.png",
+      "roi": [
+        685,
+        281,
+        139,
+        189
+      ],
+      "threshold": 0.91,
+      "source": "frame-204.000s.png"
+    },
+    "experience": {
+      "file": "experience.png",
+      "roi": [
+        160,
+        103,
+        89,
+        29
+      ],
+      "threshold": 0.91,
+      "source": "frame-212.062s.png"
+    },
+    "activity": {
+      "file": "activity.png",
+      "roi": [
+        114,
+        307,
+        142,
+        23
+      ],
+      "threshold": 0.91,
+      "source": "frame-222.078s.png"
+    },
+    "next": {
+      "file": "next.png",
+      "roi": [
+        1006,
+        627,
+        129,
+        42
+      ],
+      "threshold": 0.91,
+      "source": "frame-186.000s.png"
+    },
+    "next_detail": {
+      "file": "next_detail.png",
+      "roi": [
+        1016,
+        628,
+        99,
+        36
+      ],
+      "threshold": 0.91,
+      "source": "frame-204.000s.png"
+    },
+    "confirm_result": {
+      "file": "confirm_result.png",
+      "roi": [
+        1029,
+        630,
+        79,
+        37
+      ],
+      "threshold": 0.91,
+      "source": "frame-222.078s.png"
+    },
+    "reward_popup": {
+      "file": "reward_popup.png",
+      "roi": [
+        398,
+        84,
+        130,
+        34
+      ],
+      "threshold": 0.91,
+      "source": "frame-194.062s.png"
+    },
+    "reward_ok": {
+      "file": "reward_ok.png",
+      "roi": [
+        610,
+        583,
+        61,
+        37
+      ],
+      "threshold": 0.91,
+      "source": "frame-194.062s.png"
+    },
+    "achievement": {
+      "file": "achievement.png",
+      "roi": [
+        498,
+        59,
+        167,
+        31
+      ],
+      "threshold": 0.91,
+      "source": "frame-198.000s.png",
+      "search_roi": [
+        170,
+        48,
+        930,
+        54
+      ]
+    },
+    "achievement_close": {
+      "file": "achievement_close.png",
+      "roi": [
+        603,
+        602,
+        78,
+        36
+      ],
+      "threshold": 0.91,
+      "source": "frame-198.000s.png"
+    },
+    "cut_in_off": {
+      "file": "cut_in_off.png",
+      "roi": [
+        483,
+        635,
+        31,
+        31
+      ],
+      "threshold": 0.91,
+      "source": "frame-035.000s.png"
+    }
+  }
+}

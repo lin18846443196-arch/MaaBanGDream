@@ -162,6 +162,9 @@ class TaskProgress(CustomAction):
             phase = str(params.get("phase", "start"))
             limit = str(state.total) if state.total else "无限"
 
+            if phase == "initialize":
+                return True
+
             if phase == "start":
                 hit_count = int(context.get_hit_count(argv.node_name))
                 state.current = max(1, hit_count, state.current + 1)
@@ -258,11 +261,13 @@ class TaskOutcome(CustomAction):
                 return True
 
             if status == "success":
-                completed = state.total or state.completed
+                completed = state.completed if params.get("completed_only", False) else (state.total or state.completed)
                 message = (
                     f"{state.label}任务成功：已完成 "
                     f"{completed}/{state.total or '无限'}"
                 )
+                if reason:
+                    message += f"：{reason}"
                 log_task(state.label, "结束", "SUCCESS", message)
                 _visible_log(context, message, toast=True)
                 _states.pop(task_id, None)

@@ -28,6 +28,13 @@ MaaFramework 运行库、Python Agent、本地谱面和资源文件。
 - `debug`、`logs`、`screencap`：本机调试和日志；
 - `runtime`：包内 Miniconda 环境。
 
+通过 `启动 MaaBanGDream.cmd` 启动时，程序会自动清理 `logs`、`debug`、
+`screencap` 中最后修改时间超过 24 小时的自动运行日志、诊断录像、截图和结果记录。
+一局录像或启动诊断目录内仍有近期更新时，会保留整个目录。手动流程录像、
+`debug/config`、用户配置、校准 Profile 及未完成校准引用的证据保留。
+程序已运行时跳过清理；被占用或无法删除的文件也会跳过，不影响启动。
+仅准备配置的 `start-release.ps1 -NoLaunch` 不执行清理。
+
 客户端使用 MFA 原生 GitHub 更新入口检查和下载正式 Release。已存在便携 Python
 运行库时优先下载约 148 MiB 的 runtime-free 更新包；运行库缺失时回退完整包。
 下载支持断点续传和 SHA-256 校验，MFA 退出后由独立更新器覆盖程序文件，并保留

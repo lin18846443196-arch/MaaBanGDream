@@ -25,6 +25,7 @@ from maa.context import Context
 from maa.custom_action import CustomAction
 
 from .controller_touch import ControllerTouchDispatcher
+from .frame_sample import FrameSample, FrameSampleStatistics
 from .debug_recorder import RealtimeDebugRecorder, append_lifecycle_event
 from .engine import EngineStats, RealtimeEngine
 from .final_cover import FinalCoverResolution, FinalCoverResolver
@@ -44,6 +45,7 @@ from .note_detector import NoteDetector
 from .vision_io import imread_unicode, imwrite_unicode
 from .profile_action import PROJECT_ROOT
 from .profile_store import (
+    LEGACY_NOTE_SKIN_TYPE,
     EnvironmentSignature,
     RealtimeProfileStore,
     RuntimeSettings,
@@ -58,6 +60,7 @@ from .result_navigation import (
     handle_story_page,
 )
 from .result_parser import LiveResult, ResultParser, adjusted_timing_offset
+from .multiplayer_mode import is_multiplayer_mode
 from .run_reporting import (
     PreflightPerformanceSnapshot,
     result_report_payload as _result_report_payload,
@@ -314,6 +317,7 @@ def wait_for_final_cover(
     initial_resolution: FinalCoverResolution | None = None,
     require_observed_title: bool = False,
     ignore_preparation_level: bool = False,
+    require_confirmed_chart: bool = False,
 ) -> FinalCoverWaitOutcome:
     """确认最终封面；识别缺失时保留准备页谱面或降级到视觉演奏。"""
     if not 1 <= float(timeout_seconds) <= 180:
@@ -342,6 +346,13 @@ def wait_for_final_cover(
         require_observed_title=require_observed_title,
         allow_missing_level=ignore_preparation_level,
     )
+
+    def failure_reason() -> str:
+        # Older injected test resolvers only expose last_reason; Mock objects
+        # also synthesize unknown attributes, which are not diagnostic text.
+        value = getattr(resolver, "failure_reason", None)
+        return value if isinstance(value, str) and value else resolver.last_reason
+
     evidence_reason = resolver.evidence_reason()
     if evidence_reason is not None:
         raise RuntimeError(f"最终封面确认缺少准备页证据：{evidence_reason}")
@@ -440,16 +451,25 @@ def wait_for_final_cover(
             playfield_streak + 1 if playfield_detector(image) else 0
         )
         if observer is not None:
+            diagnostic = {
+                "event": "final_cover_observation",
+                "status": "confirmed" if resolution is not None else "observing",
+                "frames": resolver.frames,
+                "playfield_streak": playfield_streak,
+                "reason": resolver.last_reason,
+                "blocking_reason": failure_reason(),
+            }
+            failure_details = getattr(resolver, "failure_diagnostics", None)
+            if isinstance(failure_details, dict):
+                diagnostic.update(failure_details)
+                if resolution is None and failure_details.get("resolution_attempted") is True:
+                    # One fixed stage means one screenshot even if animated
+                    # cover pixels produce many distinct failed fingerprints.
+                    diagnostic["status"] = "identity-unconfirmed"
             observer(
                 image,
                 now_mono,
-                {
-                    "event": "final_cover_observation",
-                    "status": "confirmed" if resolution is not None else "observing",
-                    "frames": resolver.frames,
-                    "playfield_streak": playfield_streak,
-                    "reason": resolver.last_reason,
-                },
+                diagnostic,
             )
         if resolution is not None:
             print(
@@ -468,10 +488,12 @@ def wait_for_final_cover(
                 image=image,
             )
         if playfield_streak >= 2 and now_mono >= black_burst_until:
+            if require_confirmed_chart:
+                raise RuntimeError("最终封面谱面未确认，禁止沿用准备页候选谱面：" + failure_reason())
             if require_observed_title:
                 raise RuntimeError(
                     "最终封面页标题未确认，已在发送演奏触控前停止："
-                    f"{resolver.last_reason}"
+                    f"{failure_reason()}"
                 )
             status = (
                 "degraded-selected-chart"
@@ -494,11 +516,19 @@ def wait_for_final_cover(
             time.sleep(float(poll_interval_seconds))
     if require_black_transition:
         stage = "全黑开演转场" if not black_seen else "黑场后的歌曲封面或完整演奏场"
-        raise RuntimeError(f"启动阶段超时：{float(timeout_seconds):g} 秒内未确认{stage}；未启动输入或结算")
+        details = getattr(resolver, "failure_diagnostics", None)
+        blocking = (
+            f"；谱面确认阻断原因：{failure_reason()}"
+            if isinstance(details, dict) and details.get("resolution_attempted") is True
+            else ""
+        )
+        raise RuntimeError(f"启动阶段超时：{float(timeout_seconds):g} 秒内未确认{stage}；未启动输入或结算{blocking}")
+    if require_confirmed_chart:
+        raise RuntimeError("最终封面谱面未确认，禁止沿用准备页候选谱面：" + failure_reason())
     if require_observed_title:
         raise RuntimeError(
             "最终封面页标题未确认，已在发送演奏触控前停止："
-            f"{resolver.last_reason}"
+            f"{failure_reason()}"
         )
     status = (
         "degraded-selected-chart"
@@ -535,11 +565,19 @@ class StallSafeCapture:
     the chart-timeline after-due rescues keep advancing.
     """
 
-    def __init__(self, controller, *, timeout_seconds: float = 0.05):
+    def __init__(self, controller, *, timeout_seconds: float = 0.05,
+                 clock=time.perf_counter):
         self._controller = controller
         self._timeout_seconds = float(timeout_seconds)
+        self._clock = clock
         self._last_image = None
         self._pending = None
+        self._pending_requested_at = None
+        self._last_requested_at = None
+        self._captured_at = None
+        self._capture_id = 0
+        self._last_sample = None
+        self.statistics = FrameSampleStatistics()
         self.stall_count = 0
 
     @staticmethod
@@ -549,45 +587,83 @@ class StallSafeCapture:
         except Exception:
             return True
 
-    def __call__(self):
+    def _post_pending(self):
+        self._pending_requested_at = self._clock()
+        self._pending = self._controller.post_screencap()
+
+    def _collect_pending(self):
+        completed_at = self._clock()
+        try:
+            image = self._pending.get()
+            if image is not None:
+                self._last_image = image
+                self._last_requested_at = self._pending_requested_at
+                # The framework does not expose a device/render timestamp.
+                # Keep the host acquisition interval rather than claiming
+                # collection time is the exact time these pixels appeared.
+                self._captured_at = completed_at
+                self._capture_id += 1
+        finally:
+            self._pending = None
+            self._pending_requested_at = None
+
+    def sample(self) -> FrameSample:
+        previous_id = self._capture_id
         if self._pending is not None and self._job_done(self._pending):
             try:
-                image = self._pending.get()
-                if image is not None:
-                    self._last_image = image
+                self._collect_pending()
             except Exception:
                 pass
-            self._pending = None
         if self._pending is None:
             # Start the next capture immediately so it overlaps the engine's
             # detection/planning work (true double buffering).
-            self._pending = self._controller.post_screencap()
+            self._post_pending()
         if self._last_image is None and not self._job_done(self._pending):
             # The very first frame must exist before the detector can run;
             # blocking once here is unavoidable and only happens at startup.
             self._pending.wait()
-            self._last_image = self._pending.get()
-            self._pending = self._controller.post_screencap()
-            return self._last_image
-        if self._job_done(self._pending):
+            self._collect_pending()
+            self._post_pending()
+        elif self._job_done(self._pending):
             try:
-                image = self._pending.get()
+                self._collect_pending()
             except Exception:
-                image = None
-            if image is None:
-                if self._last_image is None:
-                    # First frame must exist before the detector can run.
-                    image = self._controller.post_screencap().wait().get()
-                else:
-                    image = self._last_image
-            self._last_image = image
+                pass
+            if self._last_image is None:
+                # First frame must exist before the detector can run.
+                self._post_pending()
+                self._pending.wait()
+                self._collect_pending()
             # Pre-post the next capture for the following frame.
-            self._pending = self._controller.post_screencap()
-            return image
-        # The in-flight capture has not finished: reuse the last completed
-        # frame so the engine clock and chart rescues keep advancing.
-        self.stall_count += 1
-        return self._last_image
+            self._post_pending()
+        if self._last_image is None:
+            raise RuntimeError("截图未返回可用图像，不能建立首拍时间")
+        is_new = self._capture_id != previous_id
+        if not is_new:
+            # Timeline/input owners may continue advancing, but cached pixels
+            # must not advance visual confirmation or first-note tracking.
+            self.stall_count += 1
+        self._last_sample = FrameSample(
+            image=self._last_image,
+            capture_id=self._capture_id,
+            is_new=is_new,
+            completed_at=self._captured_at,
+            consumed_at=self._clock(),
+            request_started_at=self._last_requested_at,
+        )
+        self.statistics.observe(self._last_sample)
+        return self._last_sample
+
+    def __call__(self):
+        """Preserve the existing ndarray capture API for other consumers."""
+        return self.sample().image
+
+    @property
+    def last_sample(self):
+        return self._last_sample
+
+    def report(self):
+        return self.statistics.report()
 
     @property
     def last_image(self):
@@ -608,6 +684,7 @@ def _run_mode(params: dict, *, is_rehearsal: bool) -> str:
 
 _RECORDING_KIND_BY_RUN_MODE = {
     "cooperative": "coop",
+    "team": "team",
     "challenge": "challenge",
     "formal": "single-formal",
     "rehearsal": "single-rehearsal",
@@ -643,6 +720,22 @@ def _recorder_checkpoint(
     method = getattr(recorder, "save_checkpoint", None)
     if callable(method):
         method(image, phase, status, details=details)
+
+
+def _record_final_cover_observation(
+    recorder, checkpoint_stages: set[str], image, timestamp: float,
+    diagnostic: dict[str, object],
+) -> None:
+    """Trace every observation; write screenshots only at fixed stage changes."""
+    record_phase = getattr(recorder, "record_phase", None)
+    if callable(record_phase):
+        record_phase(image, timestamp, "final-cover", diagnostics=[diagnostic])
+    stage = diagnostic["status"]
+    if stage not in checkpoint_stages:
+        _recorder_checkpoint(
+            recorder, image, "final-cover", stage, details=diagnostic,
+        )
+        checkpoint_stages.add(stage)
 
 
 def _recorder_update_metadata(recorder, live_run: LiveRunContext) -> None:
@@ -1732,7 +1825,7 @@ def _continue_after_completed_play(method):
                 flush=True,
             )
             params = json.loads(argv.custom_action_param or "{}")
-            if params.get("run_mode") != "cooperative" and not params.get("defer_result_collection"):
+            if not is_multiplayer_mode(params.get("run_mode")) and not params.get("defer_result_collection"):
                 try:
                     _recover_completed_result(context)
                 except Exception as recovery_error:
@@ -1752,6 +1845,12 @@ class RealtimeProfilePlay(CustomAction):
             record_failure_reason(f"{type(exc).__name__}: {exc}")
             traceback.print_exc()
             print(f"RealtimeProfilePlay failed={type(exc).__name__}: {exc}", flush=True)
+            try:
+                propagate = json.loads(argv.custom_action_param or '{}').get('propagate_failure', False)
+            except (ValueError, AttributeError):
+                propagate = False
+            if propagate:
+                raise
             return False
 
     @_continue_after_completed_play
@@ -2097,7 +2196,7 @@ class RealtimeProfilePlay(CustomAction):
                 cover_selection = (
                     None
                     if (
-                        live_run.mode == "cooperative"
+                        is_multiplayer_mode(live_run.mode)
                         or require_final_cover_title
                         or preparation_identity_pending_final_cover
                     )
@@ -2107,24 +2206,10 @@ class RealtimeProfilePlay(CustomAction):
 
                 def observe_final_cover(image, timestamp, diagnostic) -> None:
                     assert recorder is not None
-                    record_phase = getattr(recorder, "record_phase", None)
-                    if callable(record_phase):
-                        record_phase(
-                            image,
-                            timestamp,
-                            "final-cover",
-                            diagnostics=[diagnostic],
-                        )
-                    stage = diagnostic["status"]
-                    if stage not in cover_checkpoint_stages:
-                        _recorder_checkpoint(
-                            recorder,
-                            image,
-                            "final-cover",
-                            stage,
-                            details=diagnostic,
-                        )
-                        cover_checkpoint_stages.add(stage)
+                    _record_final_cover_observation(
+                        recorder, cover_checkpoint_stages, image, timestamp,
+                        diagnostic,
+                    )
 
                 cover_outcome = wait_for_final_cover(
                     controller,
@@ -2153,6 +2238,7 @@ class RealtimeProfilePlay(CustomAction):
                     ),
                     initial_resolution=startup_cover_resolution,
                     require_observed_title=require_final_cover_title,
+                    require_confirmed_chart=(native_requested and is_multiplayer_mode(live_run.mode)),
                     ignore_preparation_level=preparation_identity_pending_final_cover,
                 )
                 if recorder is not None and cover_outcome.image is not None:
@@ -2416,6 +2502,30 @@ class RealtimeProfilePlay(CustomAction):
                         selected_chart.path,
                     )
                     native_backend.configure_timing_offset(timing_offset_ms)
+                    from .native_start_config import resolve_start_sync_options
+                    startup_environment = {}
+                    if runtime_options.get("native_start_sync_mode", "shadow") == "active":
+                        startup_environment = {
+                            "resolution": list(frame_resolution(controller.cached_image)),
+                            "game_fps": int(params.get("game_fps", 60)),
+                            "note_speed": float(verified.actual_note_speed if verified is not None
+                                                else settings.note_speed if settings is not None
+                                                else params.get("note_speed", 5.0)),
+                            "note_skin_type": int(params.get("note_skin_type", LEGACY_NOTE_SKIN_TYPE)),
+                        }
+                    start_sync_options = resolve_start_sync_options(
+                        runtime_options, run_mode=live_run.mode,
+                        profile_root=PROJECT_ROOT / "profiles",
+                        environment=startup_environment,
+                    )
+                    configure_sync = getattr(native_backend, "configure_start_sync", None)
+                    if callable(configure_sync):
+                        configure_sync(start_sync_options)
+                    elif start_sync_options.mode == "active":
+                        raise RuntimeError("Native 后端缺少首组同步接管接口")
+                    if recorder is not None:
+                        append_lifecycle_event(recorder.output_dir, "native-start-sync", "configured",
+                                               details=start_sync_options.to_mapping())
                     print(
                         "RealtimeProfilePlay native_prearmed=consumed "
                         f"chart={selected_chart.path} "
@@ -2484,7 +2594,7 @@ class RealtimeProfilePlay(CustomAction):
                     # 相位被排除后会在周期性段落锁到假相位。单人/挑战等
                     # 模式演奏场与歌曲几乎同时开始，保持默认 12 秒。
                     chart_prelude_window_s=(
-                        60.0 if run_mode == "cooperative" else 12.0
+                        60.0 if is_multiplayer_mode(run_mode) else 12.0
                     ),
                 ),
                 touch,
@@ -2541,6 +2651,7 @@ class RealtimeProfilePlay(CustomAction):
             )
         except Exception as setup_error:
             cleanup_errors = []
+            cleanup_report = {}
             recorder_error = None
             if recorder is not None:
                 try:
@@ -2564,6 +2675,13 @@ class RealtimeProfilePlay(CustomAction):
                         "native_backend_stop="
                         f"{type(cleanup_error).__name__}: {cleanup_error}"
                     )
+                if params.get('propagate_failure', False):
+                    try:
+                        cleanup_report = dict(native_backend.report())
+                        if cleanup_report.get('release_confirmed') is not True:
+                            cleanup_errors.append('native release unconfirmed')
+                    except Exception as cleanup_error:
+                        cleanup_errors.append(f'native cleanup report: {cleanup_error}')
             reason = f"preflight error: {type(setup_error).__name__}: {setup_error}"
             preflight_stats = EngineStats(
                 0,
@@ -2576,7 +2694,9 @@ class RealtimeProfilePlay(CustomAction):
                 cleanup_errors=tuple(cleanup_errors),
                 recorder_error=recorder_error,
                 engine_mode="native" if native_requested else "legacy",
+                native_report=cleanup_report,
             )
+            setup_error.realtime_stats = preflight_stats
             try:
                 write_failure_artifacts(
                     preflight_stats,
@@ -2624,6 +2744,12 @@ class RealtimeProfilePlay(CustomAction):
                 ),
                 startup_timeout_seconds=startup_timeout_seconds,
             )
+            if params.get('propagate_failure', False) and (
+                stats.cleanup_failed or (stats.native_report or {}).get('release_confirmed') is False
+            ):
+                cleanup_error = RuntimeError('实时演奏触点清理失败，禁止自动恢复')
+                cleanup_error.realtime_stats = stats
+                raise cleanup_error
             if (
                 stats.completed and not stats.cleanup_failed
                 and not stats.aborted_for_life and not stats.life_failed
@@ -2723,6 +2849,7 @@ class RealtimeProfilePlay(CustomAction):
                 return True
             if error_stats is None:
                 cleanup_errors = []
+                cleanup_report = {}
                 recorder_error = None
                 if recorder is not None:
                     try:
@@ -2739,6 +2866,14 @@ class RealtimeProfilePlay(CustomAction):
                             "touch_close="
                             f"{type(cleanup_error).__name__}: {cleanup_error}"
                         )
+                if params.get('propagate_failure', False) and native_backend is not None:
+                    try:
+                        native_backend.stop()
+                        cleanup_report = dict(native_backend.report())
+                        if cleanup_report.get('release_confirmed') is not True:
+                            cleanup_errors.append('native release unconfirmed')
+                    except Exception as cleanup_error:
+                        cleanup_errors.append(f'native cleanup: {cleanup_error}')
                 reason = f"preflight error: {type(exc).__name__}: {exc}"
                 error_stats = EngineStats(
                     0,
@@ -2751,6 +2886,7 @@ class RealtimeProfilePlay(CustomAction):
                     cleanup_errors=tuple(cleanup_errors),
                     recorder_error=recorder_error,
                     engine_mode="native" if native_requested else "legacy",
+                    native_report=cleanup_report,
                 )
                 status = "preflight_error"
             else:
@@ -2759,11 +2895,15 @@ class RealtimeProfilePlay(CustomAction):
                     or f"{type(exc).__name__}: {exc}"
                 )
                 status = "engine_error"
-            write_failure_artifacts(
-                error_stats,
-                result_status=status,
-                reason=reason,
-            )
+            exc.realtime_stats = error_stats
+            try:
+                write_failure_artifacts(
+                    error_stats,
+                    result_status=status,
+                    reason=reason,
+                )
+            except Exception as artifact_error:
+                exc.add_note(f'failure artifact write failed: {artifact_error}')
             raise
         capture_metrics = stats.stage_timings_ms.get("capture", {})
         print(
@@ -2817,7 +2957,7 @@ class RealtimeProfilePlay(CustomAction):
             # 跳过数字检查不推进未知页面，由各模式外层继续必要的结算导航。
             save_result = False
             print("RealtimeProfilePlay result_check=skipped", flush=True)
-            if run_mode != "cooperative" and stats.completed and not stats.cleanup_failed:
+            if not is_multiplayer_mode(run_mode) and stats.completed and not stats.cleanup_failed:
                 _recover_completed_result(context)
         deferred_report_value = str(
             params.get("deferred_result_report") or ""
@@ -2903,6 +3043,9 @@ class RealtimeProfilePlay(CustomAction):
                     "life-failed",
                     details={"reason": reason},
                 )
+            if params.get('defer_failed_exit', False):
+                # Team owns disconnect/restart only after engine touch cleanup.
+                return False
             navigation_ok = False
             try:
                 navigation_ok = exit_failed_live(context)
@@ -2992,8 +3135,8 @@ class RealtimeProfilePlay(CustomAction):
                 timing_offset_ms=timing_offset_ms,
                 suggested_timing_offset_ms=None,
                 run_context=live_run,
-                result_status="medley_result_pending",
-                reason="组曲判定详情将在第三曲后逐首读取",
+                result_status=("team_result_pending" if run_mode == "team" else "medley_result_pending"),
+                reason=("团队结算由团队流程导航回主页" if run_mode == "team" else "组曲判定详情将在第三曲后逐首读取"),
             )
             pending_payload.update({
                 "completed": True,
@@ -3152,7 +3295,7 @@ class RealtimeProfilePlay(CustomAction):
                     f"[任务][实时演奏][结算][WARNING] {failure_reason}；演出已结束，继续后续步骤",
                     flush=True,
                 )
-                if not params.get("calibration_report") and run_mode != "cooperative":
+                if not params.get("calibration_report") and not is_multiplayer_mode(run_mode):
                     _recover_completed_result(context)
                 return True
             result_data = outcome.result

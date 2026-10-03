@@ -618,7 +618,7 @@
     ],
     "focus": {
       "Node.Action.Failed": {
-        "content": "❌ 正式演奏前置检查失败：游戏前台、截图或触控环境不满足要求",
+        "content": "❌ 正式演奏前置检查失败：请查看任务日志中 RealtimeFormalPreflight failed 的具体原因",
         "display": [
           "log"
         ]

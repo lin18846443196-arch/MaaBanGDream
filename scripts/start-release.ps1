@@ -197,6 +197,21 @@ if ($NoLaunch) {
     exit 0
 }
 
+# Prune automatic diagnostics before opening MFA. Cleanup failures and files in
+# use must never prevent startup; NoLaunch only prepares configuration.
+$artifactCleanup = Join-Path $PSScriptRoot 'cleanup_runtime_artifacts.py'
+if (Test-Path -LiteralPath $artifactCleanup -PathType Leaf) {
+    try {
+        & $python $artifactCleanup --root $packageRoot --skip-if-running
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning 'Runtime artifact cleanup was skipped; application startup continues.'
+        }
+    }
+    catch {
+        Write-Warning "Runtime artifact cleanup was skipped: $_"
+    }
+}
+
 $env:MAABANGDREAM_MFA_SESSION_ID = [Guid]::NewGuid().ToString('N')
 $env:MAABANGDREAM_MFA_ROOT = $packageRoot
 if ($OrderedStartupTrial) {

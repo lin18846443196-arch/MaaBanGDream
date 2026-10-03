@@ -11,11 +11,11 @@ from maa.custom_action import CustomAction
 
 try:
     from ..foreground_guard import require_game_foreground
-    from ..screen_refresh import capture_image
+    from ..screen_refresh import ScreenRefreshInterrupted, capture_image
     from ..task_reporting import record_failure_reason
 except ImportError:
     from foreground_guard import require_game_foreground
-    from screen_refresh import capture_image
+    from screen_refresh import ScreenRefreshInterrupted, capture_image
     from task_reporting import record_failure_reason
 
 from .profile_action import PROJECT_ROOT
@@ -222,6 +222,11 @@ def _run_speed_settings_from_home(
         _click(context, coordinates["menu_close"])
         _wait(context, delay)
         menu_open = False
+    except ScreenRefreshInterrupted:
+        # Network dismissal may have returned to login. The old close-button
+        # coordinates are no longer valid; let the outer flow restart instead.
+        settings_open = menu_open = False
+        raise
     finally:
         if settings_open:
             try:
@@ -298,6 +303,8 @@ class RealtimeGameSpeedSettingsGate(CustomAction):
                     flush=True,
                 )
                 return True
+            except ScreenRefreshInterrupted:
+                raise
             except RuntimeError as exc:
                 last_error = exc
                 if attempt >= max_attempts:

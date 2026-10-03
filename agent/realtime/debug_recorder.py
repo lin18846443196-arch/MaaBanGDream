@@ -16,6 +16,7 @@ import cv2
 import numpy as np
 
 from .note_detector import ObservedNote
+from .frame_sample import FrameSample
 from .touch_planner import TouchAction
 from .vision_io import imwrite_unicode
 
@@ -23,6 +24,7 @@ from .vision_io import imwrite_unicode
 _SENTINEL = None
 _RECORD_QUEUE_CAPACITY = 12
 _VIDEO_QUEUE_CAPACITY = 12
+_NATIVE_STARTUP_EVIDENCE_CAPACITY = 12
 _LIFECYCLE_LOCK = threading.Lock()
 
 
@@ -33,6 +35,13 @@ class _NativeLifeFrame:
     value: int | None
     visible: bool
     alive_confirmed: bool
+
+
+@dataclass(frozen=True)
+class _NativeStartupBatch:
+    samples: tuple[FrameSample, ...]
+    status: str
+    reason: str | None
 
 
 def append_lifecycle_event(
@@ -127,6 +136,11 @@ class RealtimeDebugRecorder:
         self._native_life_triggered_at: float | None = None
         self._native_life_evidence_count = 0
         self._dropped_native_life_frames = 0
+        self._native_startup_enqueued = False
+        self._native_startup_evidence_count = 0
+        self._dropped_native_startup_batches = 0
+        self._native_startup_status = None
+        self._native_startup_error = None
         self._released_at: dict[int, float] = {}
         self._diagnostic_counts: dict[str, int] = {}
         self._phase_counts: dict[str, int] = {}
@@ -311,6 +325,60 @@ class RealtimeDebugRecorder:
         except queue.Full:
             self._dropped_native_life_frames += 1
 
+    def record_native_startup(
+        self, samples: tuple[FrameSample, ...], *, status: str,
+        reason: str | None = None,
+    ) -> bool:
+        """Queue one bounded frame batch; the realtime caller never encodes."""
+        if self._closed or self._error is not None or self._native_startup_enqueued:
+            self._dropped_native_startup_batches += 1
+            return False
+        # Slicing precedes tuple conversion so a caller cannot accidentally
+        # enqueue an unbounded ring. Actual capture identity lives in metadata.
+        selected = tuple(sample for sample in samples[-_NATIVE_STARTUP_EVIDENCE_CAPACITY:]
+                         if isinstance(sample, FrameSample) and sample.is_new)
+        if not selected:
+            return False
+        try:
+            self._record_queue.put_nowait(_NativeStartupBatch(
+                selected, str(status), None if reason is None else str(reason)[:2048],
+            ))
+        except queue.Full:
+            self._dropped_native_startup_batches += 1
+            return False
+        self._native_startup_enqueued = True
+        return True
+
+    def _process_native_startup(self, batch: _NativeStartupBatch) -> None:
+        """Write source-timed PNGs and replay rows only on the record worker."""
+        self._native_startup_status = batch.status
+        try:
+            image_dir = self.output_dir / "native-startup"
+            image_dir.mkdir(exist_ok=True)
+            with (self.output_dir / "native-startup.jsonl").open(
+                "w", encoding="utf-8",
+            ) as stream:
+                for index, sample in enumerate(batch.samples):
+                    relative = Path("native-startup") / f"{index:02d}-{sample.capture_id}.png"
+                    if not imwrite_unicode(self.output_dir / relative, sample.image):
+                        raise OSError("无法保存 Native 首拍来源截图")
+                    payload = {
+                        "schema_version": 1,
+                        "phase": "native-first-note-gate",
+                        "status": batch.status,
+                        "reason": batch.reason,
+                        "image": relative.as_posix(),
+                        **sample.diagnostics(),
+                    }
+                    stream.write(json.dumps(
+                        payload, ensure_ascii=False, separators=(",", ":"),
+                    ) + "\n")
+                    self._native_startup_evidence_count += 1
+        except Exception as exc:
+            # Evidence is diagnostic only. A failed disk/PNG write must not
+            # replace the original startup rejection or stop other recording.
+            self._native_startup_error = f"{type(exc).__name__}: {exc}"
+
     def _process_native_life(self, frame: _NativeLifeFrame) -> None:
         history = self._native_life_history
         triggered = self._native_life_triggered_at
@@ -351,6 +419,9 @@ class RealtimeDebugRecorder:
                     break
                 if isinstance(item, _NativeLifeFrame):
                     self._process_native_life(item)
+                    continue
+                if isinstance(item, _NativeStartupBatch):
+                    self._process_native_startup(item)
                     continue
                 (
                     image, timestamp, notes, actions, life_status,
@@ -409,6 +480,13 @@ class RealtimeDebugRecorder:
             "dropped_trace_frames": self._dropped_trace_frames,
             "native_life_evidence_frames": self._native_life_evidence_count,
             "dropped_native_life_frames": self._dropped_native_life_frames,
+            "native_startup_evidence_frames": self._native_startup_evidence_count,
+            "native_startup_evidence_status": self._native_startup_status,
+            "native_startup_evidence_error": self._native_startup_error,
+            "dropped_native_startup_batches": self._dropped_native_startup_batches,
+            "native_startup_manifest": (
+                "native-startup.jsonl" if self._native_startup_evidence_count else None
+            ),
             "video_frames": self._video_frames,
             "skipped_video_frames": self._skipped_video_frames,
             "dropped_video_frames": self._dropped_video_frames,
@@ -494,6 +572,8 @@ class RealtimeDebugRecorder:
                 return
             if isinstance(item, _NativeLifeFrame):
                 self._dropped_native_life_frames += 1
+            elif isinstance(item, _NativeStartupBatch):
+                self._dropped_native_startup_batches += 1
             elif item is not _SENTINEL:
                 self._dropped_trace_frames += 1
 
