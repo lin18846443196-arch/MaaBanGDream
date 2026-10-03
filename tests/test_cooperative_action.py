@@ -35,9 +35,31 @@ from agent.realtime.live_session import reset_live_run, update_live_run
 ROOT = Path(__file__).parents[1]
 
 
-def _bare_flow():
+def _bare_flow(*, production_capture=False, production_resolver=False):
     flow = object.__new__(CooperativeLiveFlow)
     flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    flow.templates = {}
+    flow.settings = dict(DEFAULT_SETTINGS)
+    flow.handle_connect_failed = lambda *_args, **_kwargs: False
+    if not production_resolver:
+        flow.make_final_cover_entry_resolver = lambda: None
+    def capture():
+        state, image = flow.wait_for((), timeout=0.0, detect_member_exit=False)
+        flow._fake_page_state = state
+        return np.zeros((720, 1280, 3), dtype=np.uint8) if image is None else image
+    if not production_capture:
+        flow.capture = capture
+    flow.capture_startup = lambda: flow.capture()
+    flow.visible = lambda image, name, threshold=0.9: getattr(flow, "_fake_page_state", None) == name
+    def navigate_completed_result(*, replay):
+        if not replay:
+            return False
+        if should_stay_in_room(flow.settings):
+            flow.stay_in_room()
+            return True
+        flow.return_to_room_selection()
+        return False
+    flow.navigate_completed_result = navigate_completed_result
     return flow
 
 
@@ -140,7 +162,11 @@ def _fake_jump_flow(
         lambda image, name, threshold=0.9: visible_results.get(name, False)
     )
     flow.click = clicks.append
-    flow.dismiss_connect_failed = lambda: dismiss_calls.append(True)
+    flow.dismiss_connect_failed = lambda: (dismiss_calls.append(True), True)[1]
+    flow._wait_and_click = lambda name, point, *_args, **_kwargs: (
+        (clicks.append(point), True)[1] if visible_results.get(name, False) else False
+    )
+    monkeypatch.setattr(cooperative_action, "wait_for_game_capture_ready", lambda _context: None)
 
     class Gate:
         def __init__(self, shell):
@@ -157,7 +183,8 @@ def _fake_jump_flow(
 
     gates = []
 
-    def gate_factory(shell):
+    def gate_factory(shell, *, chain_suffix):
+        assert chain_suffix.startswith("mbdr_coop_")
         gate = Gate(shell)
         gates.append(gate)
         return gate
@@ -296,9 +323,9 @@ def test_play_ends_task_when_live_run_requests_jump(monkeypatch):
 
     with pytest.raises(JumpOutUnavailable):
         flow.play()
-    # 生命归零：先回主页（HOME）再切回游戏，然后直接结束任务。
-    assert keys == [3]
-    assert started == [cooperative_action.GAME_PACKAGE]
+    # 断网能力未确认时不扰动前台；完整恢复行为由本地能力回归另行覆盖。
+    assert keys == []
+    assert started == []
 
 
 def test_play_skips_jump_without_live_run_signal(monkeypatch):
@@ -537,6 +564,9 @@ def test_member_exit_watch_does_not_accept_static_prepare_page_as_playfield(
 
 def test_cooperative_playfield_entry_evidence_requires_narrow_motion():
     evidence = CooperativePlayfieldEntryEvidence()
+    # 本用例只隔离运动阈值；真实音符头要求由本地首音证据用例覆盖。
+    evidence._note_head_detector = lambda image: True
+    evidence._prepare_popup_detector = lambda image: False
     static = np.full((720, 1280, 3), 80, dtype=np.uint8)
     narrow_motion = static.copy()
     narrow_motion[500:540, 600:640] = 255
@@ -558,7 +588,8 @@ def test_member_exit_watch_resets_motion_evidence_between_rounds(monkeypatch):
     narrow = static.copy()
     narrow[500:540, 600:640] = 255
     black = np.zeros((720, 1280, 3), dtype=np.uint8)
-    frames = iter([static, narrow, black, static, narrow])
+    from itertools import chain, repeat
+    frames = chain([static, narrow, black, static, narrow], repeat(static))
     flow = _bare_flow()
     flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
     flow.capture = lambda: next(frames).copy()
@@ -777,6 +808,143 @@ def test_wait_for_preparation_gives_ready_page_independent_60_seconds(monkeypatc
     assert clock[0] == 230.0
 
 
+@pytest.mark.parametrize("choice", ["unspecified", "random", "current"])
+def test_song_choice_configures_and_resets(choice):
+    assert configure_cooperative_settings({"reset": True, "song_choice": choice})["song_choice"] == choice
+    assert configure_cooperative_settings({"reset": True})["song_choice"] == "unspecified"
+
+
+def test_invalid_song_choice_preserves_previous_settings():
+    configure_cooperative_settings({"reset": True, "song_choice": "current"})
+    with pytest.raises(ValueError, match="歌曲选择"):
+        configure_cooperative_settings({"song_choice": "invalid"})
+    assert current_cooperative_settings()["song_choice"] == "current"
+    configure_cooperative_settings({"reset": True})
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_preconfirmation_resolver_uses_loading_guard_trial(monkeypatch, enabled):
+    monkeypatch.setenv("MAABANGDREAM_COOPERATIVE_MEMBER_LOADING_GUARD_TRIAL", "1" if enabled else "0")
+    monkeypatch.setattr(cooperative_action, "current_live_run", lambda: SimpleNamespace(
+        difficulty="Expert", song_level=28, song_title="FIRE BIRD", song_title_confidence=0.9,
+    ))
+    monkeypatch.setattr(cooperative_action, "LocalChartRepository", lambda *args: object())
+    monkeypatch.setattr(cooperative_action, "FinalCoverResolver", lambda **kwargs: SimpleNamespace(**kwargs))
+    assert _bare_flow(production_resolver=True).make_final_cover_entry_resolver().reject_member_loading is enabled
+
+
+@pytest.mark.parametrize("choice", ["unspecified", "random", "current"])
+def test_song_choice_clicks_requested_option_and_pauses_only_once(monkeypatch, choice):
+    flow = _bare_flow()
+    flow.settings = {"song_choice": choice}
+    flow.song_choice_pause_pending = True
+    now = [0.0]
+    page = ["song_unspecified"]
+    clicks = []
+    pauses = []
+    pause = flow.pause_for_song_filter
+
+    def observed_pause():
+        pauses.append(now[0])
+        return pause()
+
+    def click(point):
+        clicks.append((point, now[0]))
+        if point == cooperative_action.COOPERATIVE_SONG_CONFIRM_POINT:
+            page[0] = "ready_button"
+
+    flow.pause_for_song_filter = observed_pause
+    flow.wait_for = lambda *args, **kwargs: (page[0], None)
+    flow.click = click
+    monkeypatch.setattr(cooperative_action.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(cooperative_action.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+    for _ in range(2):
+        page[0] = "song_unspecified"
+        flow.wait_for_preparation()
+    expected = {
+        "unspecified": [(780, 647), (1068, 647)],
+        "random": [(782, 565), (1068, 647)],
+        "current": [(1068, 647)],
+    }[choice]
+    assert [point for point, _ in clicks] == expected * 2
+    assert len(pauses) == (0 if choice == "unspecified" else 1)
+    assert clicks[0][1] == (0.0 if choice == "unspecified" else 10.0)
+
+
+@pytest.mark.parametrize("choice", ["random", "current"])
+def test_first_round_already_ready_does_not_defer_filter_pause_to_later_round(monkeypatch, choice):
+    flow = _bare_flow()
+    flow.settings = {"song_choice": choice}
+    flow.song_choice_pause_pending = True
+    page = ["ready_button"]
+    flow.wait_for = lambda *args, **kwargs: (page[0], None)
+    flow.pause_for_song_filter = lambda: pytest.fail("筛歌窗口不能顺延至第二轮")
+
+    def click(point):
+        if point == cooperative_action.COOPERATIVE_SONG_CONFIRM_POINT:
+            page[0] = "ready_button"
+
+    flow.click = click
+    monkeypatch.setattr(cooperative_action.time, "sleep", lambda seconds: None)
+    flow.wait_for_preparation()
+    page[0] = "song_unspecified"
+    flow.wait_for_preparation()
+    assert not flow.song_choice_pause_pending
+
+
+@pytest.mark.parametrize("event", ["stop", "manual-confirm", "member-exit"])
+def test_song_filter_observes_changes_before_sending_input(monkeypatch, event):
+    flow = _bare_flow()
+    flow.settings = {"song_choice": "current"}
+    flow.song_choice_pause_pending = True
+    now = [0.0]
+    clicks = []
+    flow.click = clicks.append
+
+    def wait_for(*args, **kwargs):
+        if now[0] >= 0.1:
+            if event == "member-exit":
+                raise MemberExited("协力成员退出房间")
+            return "ready_button", None
+        return "song_unspecified", None
+
+    def sleeper(seconds):
+        now[0] += seconds
+        if event == "stop":
+            flow.context.tasker.stopping = True
+
+    flow.wait_for = wait_for
+    monkeypatch.setattr(cooperative_action.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(cooperative_action.time, "sleep", sleeper)
+    if event == "manual-confirm":
+        flow.wait_for_preparation()
+    else:
+        with pytest.raises(InterruptedError if event == "stop" else MemberExited):
+            flow.wait_for_preparation()
+    assert now[0] == 0.1
+    assert clicks == []
+
+
+def test_song_filter_does_not_click_if_selection_page_disappeared(monkeypatch):
+    flow = _bare_flow()
+    flow.settings = {"song_choice": "random"}
+    flow.song_choice_pause_pending = True
+    now = [0.0]
+    clicks = []
+    flow.click = clicks.append
+
+    def wait_for(*args, **kwargs):
+        if kwargs["timeout"] > 0 and now[0] >= 10:
+            return "ready_button", None
+        return ("song_unspecified" if now[0] == 0 else None), None
+
+    flow.wait_for = wait_for
+    monkeypatch.setattr(cooperative_action.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(cooperative_action.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+    flow.wait_for_preparation()
+    assert clicks == []
+
+
 def test_private_entry_requires_explicit_entry_selection():
     configure_cooperative_settings({"reset": True, "entry_method": "private"})
     configure_cooperative_settings({"room_code": "941093"})
@@ -890,6 +1058,7 @@ def test_cooperative_interface_exposes_requested_modes_and_five_difficulties():
         "CooperativeDifficulty",
         "CooperativeCount",
         "CooperativeMemberExitPolicy",
+        "CooperativeSongChoice",
         "CooperativeDebug",
         "CooperativeDisconnectJump",
     ]
@@ -980,8 +1149,10 @@ def test_cooperative_pipeline_is_one_round_and_backs_out_of_repeat_popup():
     nodes = load(ROOT / "resource" / "pipeline" / "cooperative_live.json")
     assert nodes["CooperativeLive"]["next"] == ["CooperativeProcessConflictGuard"]
     assert nodes["CooperativeDisconnectJumpConfigure"]["next"] == [
-        "CooperativeSpeedSettingsGate"
+        "CooperativeRecover"
     ]
+    assert nodes["CooperativeRecover"]["custom_action"] == "CooperativeLiveRecover"
+    assert nodes["CooperativeRecover"]["next"] == ["CooperativeSpeedSettingsGate"]
     assert nodes["CooperativeSpeedSettingsGate"]["custom_action"] == (
         "RealtimeGameSpeedSettingsGate"
     )
@@ -1038,6 +1209,8 @@ def test_cooperative_templates_are_deployed_and_nonempty():
         "private_room_title.png",
         "room_wait.png",
         "song_unspecified.png",
+        "song_random.png",
+        "member_loading_icon.png",
         "ready_button.png",
         "member_exit_title.png",
         "connect_failed_body.png",
@@ -1046,7 +1219,7 @@ def test_cooperative_templates_are_deployed_and_nonempty():
         "disconnect_continue_body.png",
         "disconnect_confirm_body.png",
     }
-    assert required == {path.name for path in image_dir.glob("*.png")}
+    assert required <= {path.name for path in image_dir.glob("*.png")}
     assert all(
         cv2.imread(str(image_dir / name), cv2.IMREAD_COLOR) is not None
         for name in required
@@ -1268,7 +1441,7 @@ def test_capture_uses_shared_safe_refresh_instead_of_cached_reverse_controller(
         safe_refresh,
         raising=False,
     )
-    flow = _bare_flow()
+    flow = _bare_flow(production_capture=True)
     flow.context = context
 
     assert flow.capture() is expected
@@ -1515,7 +1688,7 @@ def test_post_score_cycle_finishes_second_safe_click_before_recognition(
         lambda _controller: None,
     )
 
-    def recognise(_names, *, timeout):
+    def recognise(_names, *, timeout, connection_retry):
         actions.append(("recognise", timeout))
         return "room_search"
 
@@ -1577,6 +1750,47 @@ def test_post_score_exit_checks_one_frame_without_nested_timeout():
     flow.wait_for = wait_for
     assert flow.wait_for_post_score_destination(("room_search",), timeout=2) == "room_search"
     assert seen == [(0.0, False, True)]
+    assert flow._post_score_refresh is False
+
+
+@pytest.mark.parametrize("animation_pending", [False, True])
+def test_post_score_cancel_consumes_home_evidence_without_another_back(animation_pending):
+    flow = _bare_flow()
+    actions = []
+    frames = iter(["quit", "quit" if animation_pending else "home", "home"])
+    flow.capture = lambda: next(frames)
+    flow.pipeline_box = lambda image, node: (
+        SimpleNamespace(x=360, y=510, w=560, h=140)
+        if image == "quit" and node == "QuitConfirmCancel" else None
+    )
+    flow.click = actions.append
+    state = flow.wait_for_post_score_destination(("room_search",), timeout=2)
+    assert state == ("story" if animation_pending else "home")
+    assert actions == [(640, 580)]
+    if animation_pending:
+        # 下一帧主页模板仍漏识别，也应消费之前的弹窗证据而不重新按返回。
+        assert flow.wait_for_post_score_destination(("room_search",), timeout=2) == "home"
+        assert actions == [(640, 580)]
+    assert flow._post_score_refresh is False
+
+
+def test_stop_after_quit_cancel_does_not_recognize_a_home_terminal():
+    flow = _bare_flow()
+    flow.wait_for = lambda *args, **kwargs: (None, "quit")
+    flow.pipeline_box = lambda image, node: (
+        SimpleNamespace(x=360, y=510, w=560, h=140)
+        if node == "QuitConfirmCancel" else None
+    )
+    flow.click = lambda point: setattr(flow.context.tasker, "stopping", True)
+
+    def capture():
+        if flow.stopped():
+            raise InterruptedError("用户已停止任务")
+        return "quit"
+
+    flow.capture = capture
+    with pytest.raises(InterruptedError):
+        flow.wait_for_post_score_destination(("room_search",), timeout=2)
     assert flow._post_score_refresh is False
 
 
@@ -1709,7 +1923,7 @@ def test_private_stay_reuses_room_until_requested_count_is_complete():
 
     assert flow.run() is True
     assert reuse_flags == [False, True, True]
-    assert stays == [True, True, True]
+    assert stays == [True, True]
     assert progress == [(1, 3), (2, 3), (3, 3)]
 
 

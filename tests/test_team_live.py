@@ -827,6 +827,8 @@ class IntegrationTests(unittest.TestCase):
         team=json.loads((ROOT/'resource/pipeline/team_live.json').read_text(encoding='utf-8'))
         interfaces=[]
         for filename in ['interface.template.json','interface.json']:
+            if not (ROOT/filename).exists() and filename == 'interface.template.json':
+                continue  # 源码只有 interface.json，模板由发布构建生成。
             data=json.loads((ROOT/filename).read_text(encoding='utf-8'))
             task=next(t for t in data['task'] if t['name']=='TeamLive')
             self.assertEqual(task['entry'],'TeamLive')
@@ -837,8 +839,8 @@ class IntegrationTests(unittest.TestCase):
                 if spec['type']=='input':
                     self.assertRegex(spec['inputs'][0]['default'],spec['inputs'][0]['verify'])
             interfaces.append(data)
-        self.assertEqual(interfaces[0]['task'],interfaces[1]['task'])
-        before=json.loads((ROOT/'backup/team-live-before-20260923/interface.json').read_text(encoding='utf-8'))
-        self.assertEqual(interfaces[1]['agent'],before['agent'])
+        self.assertEqual(interfaces[0]['task'],interfaces[-1]['task'])
+        self.assertEqual(interfaces[-1]['agent'],
+                         {'child_exec': 'python', 'child_args': ['./agent/server.py']})
 
 if __name__=='__main__': unittest.main()

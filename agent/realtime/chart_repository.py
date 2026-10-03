@@ -72,7 +72,9 @@ def _coalesce_equivalent_charts(songs: list[dict[str, Any]], difficulty: str) ->
             unresolved.append(song)
             continue
         key = (digest, entry.get("level"), entry.get("expected_notes"),
-               fingerprints, _catalog_song_is_full(song))
+               fingerprints, _catalog_song_is_full(song),
+               tuple(sorted({normalize_song_title(title)
+                             for title in song.get("titles", ())})))
         prior = unique.get(key)
         if prior is None or int(song["bestdori_song_id"]) < int(prior["bestdori_song_id"]):
             unique[key] = song
