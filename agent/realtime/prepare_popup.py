@@ -47,8 +47,11 @@ class CooperativePreparePopupDetector:
     _MAX_BOX_ASPECT = 9.0
     _MIN_BOX_CENTER_X = 0.32
     _MAX_BOX_CENTER_X = 0.68
-    _MIN_BOX_CENTER_Y = 0.55
-    _MAX_BOX_CENTER_Y = 0.80
+    # 弹窗缩放动画始终以自身中心为锚点，因此尺寸会变化，但主体中心仍在
+    # 画面高度约 66% 的位置。判定线附近的白底粉色双 FLICK 位于更下方；
+    # 收紧中心范围可在单帧内区分两者，不依赖弹窗是否完整放大。
+    _MIN_BOX_CENTER_Y = 0.60
+    _MAX_BOX_CENTER_Y = 0.70
 
     # 弹窗左侧八分音符图标的粉红渐变是强特征。只在白色主体内部左三分之
     # 一统计粉色，避免把舞台角色身上的粉色当成弹窗图标。
@@ -60,6 +63,11 @@ class CooperativePreparePopupDetector:
 
     _WHITE_SAT_MAX = 70
     _WHITE_VAL_MIN = 190
+
+    def __init__(self, *, verify_content: bool = False):
+        # Multiplayer start gates use the stricter check: white note heads/
+        # effects can satisfy the broad rectangle + pink-pixel heuristic.
+        self.verify_content = bool(verify_content)
 
     def __call__(self, image: Any) -> bool:
         if (
@@ -150,6 +158,23 @@ class CooperativePreparePopupDetector:
             <= self._MAX_BOX_CENTER_Y * height
         ):
             return False
+
+        if self.verify_content:
+            # The dialog scales around the screen centre. Its solid white
+            # body and dark text on the right survive the scale animation;
+            # hollow note rings and judgement glyphs do not have both.
+            if abs(center_x / width - .5) > .04:
+                return False
+            if stats[largest, cv2.CC_STAT_AREA] / box_area < .80:
+                return False
+            text_roi = hsv[box_y:box_y+box_h,
+                           box_x+box_w//3:box_x+box_w]
+            dark = (text_roi[:, :, 1] < 100) & (text_roi[:, :, 2] < 160)
+            text_rows = np.count_nonzero(dark, axis=1)
+            text_columns = np.count_nonzero(dark, axis=0)
+            if (np.count_nonzero(text_rows) < .10 * box_h
+                    or np.count_nonzero(text_columns) < .15 * text_roi.shape[1]):
+                return False
 
         # 只统计白色主体左三分之一内的粉色像素，保证“白底 + 粉图标”
         # 同时成立才视为弹窗。

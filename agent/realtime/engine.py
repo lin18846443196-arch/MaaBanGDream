@@ -9,6 +9,7 @@ from dataclasses import dataclass, field, replace
 import numpy as np
 
 from .controller_touch import ControllerTouchDispatcher
+from .frame_sample import FrameSample, FrameSampleStatistics
 from .note_detector import NoteDetector
 from .life_monitor import LifeDetector, LifeGuard, LifeStatus, PlayfieldCompletionGuard
 from .live_failed_detector import LiveFailedPopupDetector
@@ -85,6 +86,7 @@ class EngineStats:
     native_report: dict[str, object] = field(default_factory=dict)
     # 仅调试记录开启时填充；用于说明数值生命监控为何没有确认归零。
     life_monitor_diagnostics: dict[str, object] = field(default_factory=dict)
+    capture_diagnostics: dict[str, object] = field(default_factory=dict)
 
 
 class _LifeMonitorDiagnostics:
@@ -306,6 +308,34 @@ class RealtimeEngine:
         scheduled_actions.clear()
         native_exclusive = self.native_backend_takeover()
         native_started = False
+        native_monitor_interval = 0.2
+        native_video_enabled = bool(
+            native_exclusive
+            and getattr(self.debug_recorder, "video_enabled", False)
+            and callable(getattr(self.debug_recorder, "record_phase", None))
+        )
+        # Full diagnostics need several frames across a short slide. Native
+        # input remains on its independent owner; only capture/async recording
+        # runs faster, while life and completion keep their 200 ms cadence.
+        native_capture_interval = (
+            min(native_monitor_interval, 1 / max(1, min(
+                target_fps, int(getattr(self.debug_recorder, "video_fps", 60)), 60
+            )))
+            if native_video_enabled else native_monitor_interval
+        )
+        next_native_monitor_at = float('-inf')
+        native_video_cadence_recorded = False
+        next_gate_trace_at = float('-inf')
+        last_gate_popup = None
+        gate_evidence_count = 0
+        capture_sample_statistics = FrameSampleStatistics()
+        previous_capture_id = None
+        startup_evidence: deque[FrameSample] = deque(maxlen=12)
+        startup_evidence_enqueuer = getattr(
+            self.debug_recorder, "record_native_startup", None,
+        )
+        startup_evidence_flushed = False
+        startup_evidence_report: dict[str, object] = {}
         life_monitor_diagnostics = (
             _LifeMonitorDiagnostics()
             if (
@@ -325,6 +355,26 @@ class RealtimeEngine:
             stage_samples_ms[stage].append(elapsed_ms)
             stage_sample_counts[stage] += 1
             stage_max_ms[stage] = max(stage_max_ms[stage], elapsed_ms)
+
+        def flush_startup_evidence(status: str, reason: str | None = None) -> None:
+            nonlocal startup_evidence_flushed
+            if startup_evidence_flushed or not callable(startup_evidence_enqueuer):
+                return
+            startup_evidence_flushed = True
+            startup_evidence_report.update({
+                "status": status, "frames": len(startup_evidence),
+                "enqueue_accepted": False,
+            })
+            try:
+                startup_evidence_report["enqueue_accepted"] = bool(
+                    startup_evidence_enqueuer(
+                        tuple(startup_evidence), status=status, reason=reason,
+                    )
+                )
+            except Exception as exc:
+                startup_evidence_report["enqueue_error"] = f"{type(exc).__name__}: {exc}"
+            finally:
+                startup_evidence.clear()
 
         def record_terminal_life_frame(
             image: np.ndarray,
@@ -530,6 +580,10 @@ class RealtimeEngine:
                     and self.life_guard is not None
                     else {}
                 ),
+                capture_diagnostics={
+                    **capture_sample_statistics.report(),
+                    "startup_evidence": dict(startup_evidence_report),
+                },
             )
 
         synchronize_touch = getattr(self.touch, "synchronize", None)
@@ -586,7 +640,8 @@ class RealtimeEngine:
                     time.sleep(min(0.002, wait_target - now))
                     continue
                 capture_interval = (
-                    0.2 if native_exclusive and native_started else interval
+                    native_capture_interval
+                    if native_exclusive and native_started else interval
                 )
                 next_frame += capture_interval
                 if now - next_frame > capture_interval:
@@ -595,6 +650,26 @@ class RealtimeEngine:
                 image = capture()
                 now = self.clock()
                 record_stage_sample("capture", (now - stage_started) * 1000)
+                frame_sample = getattr(capture, "last_sample", None)
+                if not isinstance(frame_sample, FrameSample):
+                    frame_sample = None
+                if frame_sample is not None:
+                    if (
+                        frame_sample.valid_metadata and frame_sample.is_new and previous_capture_id is not None
+                        and frame_sample.capture_id <= previous_capture_id
+                    ):
+                        frame_sample = replace(frame_sample, is_new=False)
+                    if frame_sample.valid_metadata and frame_sample.is_new:
+                        previous_capture_id = frame_sample.capture_id
+                    capture_sample_statistics.observe(frame_sample)
+                    if (
+                        native_exclusive and not native_started
+                        and frame_sample.valid_metadata and frame_sample.is_new and callable(startup_evidence_enqueuer)
+                    ):
+                        startup_evidence.append(frame_sample)
+                frame_diagnostics = (
+                    frame_sample.diagnostics() if frame_sample is not None else {}
+                )
                 if stopping():
                     was_stopped = True
                     break
@@ -606,11 +681,53 @@ class RealtimeEngine:
                         raise RuntimeError(
                             "Native 后端缺少 observe_start_frame() photogate 接口"
                         )
-                    first_action_anchor = observe_start(image, now)
+                    try:
+                        observe_sample = getattr(
+                            self.native_backend, "observe_start_sample", None
+                        )
+                        if frame_sample is not None and callable(observe_sample):
+                            first_action_anchor = observe_sample(frame_sample)
+                        elif frame_sample is not None and not frame_sample.eligible_for_start:
+                            # Older backends may still be used by extensions;
+                            # cached/uncertain pixels must never advance them.
+                            first_action_anchor = None
+                        else:
+                            first_action_anchor = observe_start(image, now)
+                    except Exception as exc:
+                        flush_startup_evidence("rejected", str(exc))
+                        record_phase = getattr(self.debug_recorder, 'record_phase', None)
+                        if callable(record_phase):
+                            record_phase(image, now, 'native-first-note-gate', diagnostics=[{
+                                'event': 'native-first-note-rejected',
+                                'evidence_screenshot': True, 'reason': str(exc),
+                                'frame_sample': frame_diagnostics,
+                            }])
+                        raise
+                    # Native used to skip recording every pre-trigger frame,
+                    # even with full video enabled. Queue existing captures;
+                    # never write images synchronously in the 60 Hz gate loop.
+                    if self.debug_recorder is not None:
+                        record_phase = getattr(self.debug_recorder, 'record_phase', None)
+                        read_gate = getattr(self.native_backend, 'start_gate_diagnostics', None)
+                        diagnostics = []
+                        if callable(read_gate) and (now >= next_gate_trace_at or first_action_anchor is not None):
+                            gate = read_gate()
+                            popup = gate.get('photogate_popup_active')
+                            evidence = gate_evidence_count < 16 and (
+                                popup != last_gate_popup or first_action_anchor is not None)
+                            gate_evidence_count += int(evidence)
+                            last_gate_popup = popup
+                            diagnostics = [{'event': 'native-first-note-gate',
+                                'evidence_screenshot': evidence,
+                                'frame_sample': frame_diagnostics, **gate}]
+                            next_gate_trace_at = now + .1
+                        if callable(record_phase) and (diagnostics or getattr(self.debug_recorder, 'video_enabled', False)):
+                            record_phase(image, now, 'native-first-note-gate', diagnostics=diagnostics)
                     if first_action_anchor is None:
                         frames += 1
                         if now - started_at >= startup_timeout_seconds:
                             startup_timed_out = True
+                            flush_startup_evidence("timeout", "Native 首拍观察超时")
                             record_startup_timeout_frame(
                                 image,
                                 now,
@@ -623,12 +740,58 @@ class RealtimeEngine:
                     start_native = getattr(self.native_backend, "start", None)
                     if start_native is None:
                         raise RuntimeError("Native 后端缺少 start() 会话接口")
+                    flush_startup_evidence("triggered")
                     start_native(float(first_action_anchor))
                     native_started = True
                     if self.playfield_monitor is not None:
                         self.playfield_monitor.mark_active(now)
-                    # 首拍之后截图只服务生命和终态识别，固定降到约 5Hz。
-                    next_frame = now + 0.2
+                    # Normal Native monitoring stays at 5 Hz; full recording
+                    # additionally captures frames between monitoring ticks.
+                    next_frame = now + native_capture_interval
+                if native_exclusive and native_started and native_video_enabled:
+                    if now < next_native_monitor_at:
+                        diagnostics = []
+                        if not native_video_cadence_recorded:
+                            diagnostics = [{
+                                "event": "native-diagnostic-cadence",
+                                "capture_target_fps": 1 / native_capture_interval,
+                                "monitor_interval_ms": native_monitor_interval * 1000,
+                            }]
+                            native_video_cadence_recorded = True
+                        self.debug_recorder.record_phase(
+                            image, now, 'native-diagnostic-video',
+                            diagnostics=diagnostics + ([{
+                                "event": "capture-sample", **frame_diagnostics,
+                            }] if frame_diagnostics else []),
+                        )
+                        # Extra video frames must never advance frame-count
+                        # guards, completion detection or Native polling.
+                        continue
+                    next_native_monitor_at = now + native_monitor_interval
+                if (
+                    native_exclusive and native_started
+                    and frame_sample is not None
+                    and (not frame_sample.valid_metadata or not frame_sample.is_new)
+                ):
+                    # Input timing and device completion are independent of
+                    # screenshot freshness. Poll the Native owner even when
+                    # capture stalls, but never increment visual guard streaks
+                    # using the same old pixels repeatedly.
+                    poll_native = getattr(self.native_backend, "poll", None)
+                    if poll_native is None:
+                        raise RuntimeError("Native 后端缺少 poll() 会话接口")
+                    stage_started = self.clock()
+                    poll_native(now)
+                    record_stage_sample(
+                        "native_backend", (self.clock() - stage_started) * 1000,
+                    )
+                    record_phase = getattr(self.debug_recorder, "record_phase", None)
+                    if callable(record_phase):
+                        record_phase(image, now, "capture-cached", diagnostics=[{
+                            "event": "capture-sample", **frame_diagnostics,
+                        }])
+                    frames += 1
+                    continue
                 # 死亡弹窗监控不依赖数值生命条；演奏场成立后以约 5Hz 检查
                 # “演出失败”弹窗，必须先于演奏场消失判定，否则弹窗遮挡会
                 # 被误判成“进入结算”。
@@ -704,6 +867,16 @@ class RealtimeEngine:
                         reading = self.life_detector.detect(image)
                         status = self.life_guard.update(reading)
                         life_status = status.value
+                        if native_exclusive and native_started:
+                            record_native_life = getattr(
+                                self.debug_recorder, "record_native_life", None
+                            )
+                            if callable(record_native_life):
+                                record_native_life(
+                                    image, now, reading.value,
+                                    visible=reading.visible,
+                                    alive_confirmed=self.life_guard.alive_confirmed,
+                                )
                         if life_monitor_diagnostics is not None:
                             candidate = life_monitor_diagnostics.observe(
                                 reading,
@@ -794,6 +967,8 @@ class RealtimeEngine:
                     )
 
                 diagnostics: list[dict[str, object]] = life_diagnostic_events
+                if frame_diagnostics:
+                    diagnostics.append({"event": "capture-sample", **frame_diagnostics})
                 reset_touch = getattr(
                     self.touch, "emergency_release_all", None
                 )
@@ -1139,14 +1314,19 @@ class RealtimeEngine:
                 )
             else:
                 terminal_reason = "持续监听演奏已结束"
+            if native_exclusive and not native_started and not was_stopped:
+                flush_startup_evidence("timeout", terminal_reason)
             base_stats = snapshot_stats(terminal_reason)
         except Exception as exc:
             run_error = exc
+            if native_exclusive and not native_started:
+                flush_startup_evidence("rejected", str(exc))
             base_stats = snapshot_stats(
                 "实时演奏引擎异常: "
                 f"{type(exc).__name__}: {exc}"
             )
         finally:
+            startup_evidence.clear()
             if not native_exclusive:
                 try:
                     cleanup = self.planner.reset(self.clock())

@@ -110,7 +110,9 @@
     ]
   },
   "AutoLiveRoundGate": {
-    "recognition": "DirectHit",
+    "recognition": "Custom",
+    "custom_recognition": "TaskRoundAvailable",
+    "custom_recognition_param": {"total": 1},
     "action": "Custom",
     "custom_action": "TaskProgress",
     "custom_action_param": {
@@ -119,7 +121,7 @@
       "total": 1,
       "phase": "start"
     },
-    "max_hit": 1,
+    "on_error": ["AutoLiveFailure"],
     "next": [
       "AutoLiveHomeLive"
     ]
@@ -436,18 +438,23 @@
   "AutoLiveDifficulty": {
     "recognition": "DirectHit",
     "action": "Custom",
-    "custom_action": "ForegroundClick",
-    "target": [
-      715,
-      545
-    ],
-    "post_delay": 500,
+    "custom_action": "RealtimeDifficultySelect",
+    "custom_action_param": {
+      "difficulty": "Easy",
+      "max_attempts": 3,
+      "verify_delay_seconds": 0.35,
+      "track_live_run": false,
+      "song_identity": false
+    },
     "next": [
       "AutoLivePrepare"
     ],
+    "on_error": [
+      "AutoLiveFailure"
+    ],
     "focus": {
       "Node.Action.Failed": {
-        "content": "❌ 点击失败：游戏不在前台、控制器拒绝输入或页面位置已变化",
+        "content": "❌ 难度选择失败：当前歌曲没有请求的难度或按钮不可选择",
         "display": [
           "log"
         ]
@@ -637,7 +644,7 @@
     "template": "live_result.png",
     "threshold": 0.9,
     "action": "Custom",
-    "custom_action": "CommonRecover",
+    "custom_action": "CompletedLiveRecover",
     "custom_action_param": {
       "home_node": "AutoLiveHomeMarker",
       "modal_cancel_nodes": [

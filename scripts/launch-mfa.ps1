@@ -4,13 +4,16 @@
     [string]$EnvironmentName = 'maabangdream',
     [switch]$OrderedStartupTrial,
     [switch]$NativeTimingTrial,
-    [switch]$DisableNativeTimingCompensation
+    [switch]$CooperativeMemberLoadingGuardTrial,
+    [switch]$DisableNativeTimingCompensation,
+    [switch]$VerifyAdbEndpoint
 )
 
 $ErrorActionPreference = 'Stop'
 # 候选行为仅由本次启动显式启用；普通启动保留已发布行为，便于真机对照。
 
 $env:MAABANGDREAM_ORDERED_STARTUP = if ($OrderedStartupTrial) { '1' } else { '0' }
+$env:MFA_VERIFY_ADB_ENDPOINT = if ($VerifyAdbEndpoint) { '1' } else { '0' }
 # 已验收的等待成本与首命令启动补偿默认启用，仅保留显式关闭入口用于回归排查。
 
 $env:MAABANGDREAM_NATIVE_TIMING_TRIAL = if ($DisableNativeTimingCompensation) { '0' } else { '1' }
@@ -24,6 +27,9 @@ if (-not $CondaRoot) {
 }
 
 $mfaExe = Join-Path $MfaRoot 'MFAAvalonia.exe'
+if (Test-Path -LiteralPath (Join-Path $MfaRoot 'YesBanGDream.exe')) {
+    $mfaExe = Join-Path $MfaRoot 'YesBanGDream.exe'
+}
 $sourceInterface = Join-Path $projectRoot 'interface.json'
 $sourceResource = Join-Path $projectRoot 'resource'
 $deployedInterface = Join-Path $MfaRoot 'interface.json'
@@ -55,7 +61,7 @@ foreach ($required in ($mfaExe, $sourceInterface, $sourceResource, $python, $age
 $resolvedTargetMfaPath = (Resolve-Path -LiteralPath $mfaExe).ProviderPath
 $targetMfaProcesses = @()
 $otherMfaProcesses = @()
-Get-CimInstance Win32_Process -Filter "Name = 'MFAAvalonia.exe'" | ForEach-Object {
+Get-CimInstance Win32_Process -Filter "Name = 'MFAAvalonia.exe' OR Name = 'YesBanGDream.exe'" | ForEach-Object {
     $runningPath = $_.ExecutablePath
     if ([string]::IsNullOrWhiteSpace($runningPath)) {
         $otherMfaProcesses += [PSCustomObject]@{
@@ -65,7 +71,7 @@ Get-CimInstance Win32_Process -Filter "Name = 'MFAAvalonia.exe'" | ForEach-Objec
     }
     else {
         $fullRunningPath = (Resolve-Path -LiteralPath $runningPath).ProviderPath
-        if ($fullRunningPath -ieq $resolvedTargetMfaPath) {
+        if ((Split-Path -Parent $fullRunningPath) -ieq (Split-Path -Parent $resolvedTargetMfaPath)) {
             $targetMfaProcesses += $_
         }
         else {
@@ -121,7 +127,40 @@ foreach ($runtimeDirectory in ($profileDirectory, $recordingDirectory, $captureD
 }
 Copy-Item -Path (Join-Path $sourceResource '*') -Destination $deployedResource -Recurse -Force
 
-foreach ($aboutAsset in @('docs/about.md', 'docs/contact.md', 'docs/assets/maabangdream-logo-v1.png')) {
+# Copy-Item 不会清理已从源码删除的文件；仅移除这次流速化后明确废弃的
+# NOTE TYPE 识别模板，避免开发运行目录继续携带已经删除的视觉设置资产。
+$deployedPerformanceRoot = [System.IO.Path]::GetFullPath(
+    (Join-Path $deployedResource 'image\performance_settings')
+)
+$deployedPerformancePrefix = $deployedPerformanceRoot.TrimEnd(
+    [System.IO.Path]::DirectorySeparatorChar
+) + [System.IO.Path]::DirectorySeparatorChar
+$obsoletePerformanceAssets = @(
+    'type_digits.png',
+    'type_labels\type_label_1.png',
+    'type_labels\type_label_2.png',
+    'type_labels\type_label_3.png',
+    'type_labels\type_label_4.png',
+    'type_labels\type_label_5.png',
+    'type_labels\type_label_6.png',
+    'type_labels\type_label_7.png'
+)
+foreach ($relativeAsset in $obsoletePerformanceAssets) {
+    $obsoleteAsset = [System.IO.Path]::GetFullPath(
+        (Join-Path $deployedPerformanceRoot $relativeAsset)
+    )
+    if (-not $obsoleteAsset.StartsWith(
+        $deployedPerformancePrefix,
+        [System.StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw "Refusing to remove asset outside deployment root: $obsoleteAsset"
+    }
+    if (Test-Path -LiteralPath $obsoleteAsset -PathType Leaf) {
+        Remove-Item -LiteralPath $obsoleteAsset -Force
+    }
+}
+
+foreach ($aboutAsset in @('docs/about.md', 'docs/contact.md', 'docs/announcement.md', 'docs/assets/yesbangdream-logo.png')) {
     $aboutDestination = Join-Path $MfaRoot $aboutAsset
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $aboutDestination) | Out-Null
     Copy-Item -LiteralPath (Join-Path $projectRoot $aboutAsset) -Destination $aboutDestination -Force
@@ -160,6 +199,11 @@ if (Test-Path -LiteralPath $deployedBestdoriRoot -PathType Container) {
 }
 
 $interface = Get-Content -LiteralPath $sourceInterface -Raw -Encoding utf8 | ConvertFrom-Json
+# 开发候选使用与同版本发布包一致的说明，便于直接验收阅读弹窗。
+$releaseNotes = Join-Path $projectRoot ("docs/release-notes-v{0}.md" -f $interface.version.TrimStart('v'))
+if (Test-Path -LiteralPath $releaseNotes -PathType Leaf) {
+    Copy-Item -LiteralPath $releaseNotes -Destination (Join-Path $MfaRoot 'resource/Release.md') -Force
+}
 $interface.resource[0].path = @('./resource/resource')
 $interface.agent.child_exec = $python.Replace('\', '/')
 $agentArgs = @($agent.Replace('\', '/'))
@@ -170,6 +214,10 @@ else {
     # MFA 启动 Agent 时可能不保留父进程临时环境，命令行参数是可核验的传递通道。
 
     $agentArgs += '--native-timing-trial'
+}
+if ($CooperativeMemberLoadingGuardTrial) {
+    # 通过命令行传递候选，避免 MFA 子进程过滤临时环境变量后保护失效。
+    $agentArgs += '--cooperative-member-loading-guard-trial'
 }
 $interface.agent.child_args = $agentArgs
 $interfaceJson = $interface | ConvertTo-Json -Depth 100
@@ -193,6 +241,12 @@ if (
     '--disable-native-timing-compensation' -notin $deployedAgentArgs
 ) {
     throw 'Native timing compensation disable flag was not written to deployed interface.json'
+}
+if (
+    $CooperativeMemberLoadingGuardTrial -and
+    '--cooperative-member-loading-guard-trial' -notin $deployedAgentArgs
+) {
+    throw 'Cooperative member loading guard trial flag was not written to deployed interface.json'
 }
 
 # The custom MFA settings page reads this ignored, machine-local sidecar. It is
@@ -263,6 +317,7 @@ if (Test-Path -LiteralPath $instanceConfigDirectory) {
 # With strict failure propagation enabled, that race reports a user stop as a
 # failure. Deploy the pinned one-line upstream-compatible status fix once.
 & $mfaStopStatusPatch -MfaRoot $MfaRoot
+$mfaExe = Join-Path $MfaRoot 'YesBanGDream.exe'
 
 # Every Agent child launched by this MFA process inherits the same session id.
 # The ALAS conflict guard uses it to allow cleanup only after a first warning
@@ -274,6 +329,7 @@ try {
 }
 finally {
     Remove-Item Env:MAABANGDREAM_ORDERED_STARTUP -ErrorAction SilentlyContinue
+    Remove-Item Env:MFA_VERIFY_ADB_ENDPOINT -ErrorAction SilentlyContinue
     Remove-Item Env:MAABANGDREAM_NATIVE_TIMING_TRIAL -ErrorAction SilentlyContinue
     Remove-Item Env:MAABANGDREAM_MFA_SESSION_ID -ErrorAction SilentlyContinue
     Remove-Item Env:MAABANGDREAM_MFA_ROOT -ErrorAction SilentlyContinue
@@ -285,3 +341,4 @@ Write-Host "Deployment: $MfaRoot"
 Write-Host "Conda environment: $EnvironmentName ($python)"
 Write-Host "Ordered startup trial: $([bool]$OrderedStartupTrial)"
 Write-Host "Native timing compensation: $(-not [bool]$DisableNativeTimingCompensation)"
+Write-Host "Cooperative member loading guard trial: $([bool]$CooperativeMemberLoadingGuardTrial)"

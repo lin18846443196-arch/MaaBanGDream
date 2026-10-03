@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 import unicodedata
 
+import cv2
+import numpy as np
+
 from .chart_repository import LocalChartRepository
+from .runtime_flags import cooperative_member_loading_guard_enabled
 from .song_identity import (
     LOOSE_SAME_SONG_DISTANCE,
     UNKNOWN_SONG_ID,
@@ -15,6 +21,34 @@ from .song_identity import (
     same_song,
 )
 from .song_title_ocr import title_similarity
+from .vision_io import imread_unicode
+
+
+MEMBER_LOADING_ICON_TEMPLATE = (
+    Path(__file__).resolve().parents[2]
+    / "resource" / "image" / "cooperative" / "member_loading_icon.png"
+)
+MEMBER_LOADING_ICON_THRESHOLD = 0.90
+
+
+@lru_cache(maxsize=1)
+def member_loading_icon() -> np.ndarray:
+    template = imread_unicode(MEMBER_LOADING_ICON_TEMPLATE, cv2.IMREAD_COLOR)
+    if template is None:
+        # 启用候选后模板缺失必须失败，不能退回未经保护的身份确认。
+        raise RuntimeError("协力成员加载页模板缺失或损坏")
+    return template
+
+
+def is_member_loading_screen(image: Any) -> bool:
+    """全图寻找等待页表情图标，兼容玩家展开表情面板后图标上移。"""
+    if not isinstance(image, np.ndarray) or image.ndim != 3 or image.shape[2] < 3:
+        return False
+    template = member_loading_icon()
+    if image.shape[0] < template.shape[0] or image.shape[1] < template.shape[1]:
+        return False
+    result = cv2.matchTemplate(image[:, :, :3], template, cv2.TM_CCOEFF_NORMED)
+    return bool(float(cv2.minMaxLoc(result)[1]) >= MEMBER_LOADING_ICON_THRESHOLD)
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,6 +62,8 @@ class FinalCoverConfirmation:
 class FinalCoverResolution:
     confirmation: FinalCoverConfirmation
     selection: Any
+    observed_title: str | None = None
+    observed_title_confidence: float = 0.0
 
 
 def _is_full_song(selection: Any) -> bool:
@@ -52,6 +88,7 @@ class FinalCoverGate:
         difficulty: str,
         observed_level: int | None,
         observed_title: str | None,
+        allow_missing_level: bool = False,
     ) -> None:
         self.selection = selection
         self.difficulty = str(difficulty).strip().lower()
@@ -61,6 +98,7 @@ class FinalCoverGate:
         self.observed_title = (
             None if observed_title is None else str(observed_title).strip()
         )
+        self.allow_missing_level = bool(allow_missing_level)
         self.confirmed = False
         self.frames = 0
         self.last_reason = "final cover has not been observed"
@@ -74,8 +112,12 @@ class FinalCoverGate:
             return "difficulty conflicts with selected chart"
         expected_level = getattr(self.selection, "level", None)
         if self.observed_level is None:
-            return "preparation song level is missing"
-        if expected_level is None or int(expected_level) != self.observed_level:
+            if not self.allow_missing_level:
+                return "preparation song level is missing"
+        elif (
+            expected_level is None
+            or int(expected_level) != self.observed_level
+        ):
             return "preparation song level conflicts with selected chart"
         if bool(getattr(self.selection, "shared_jacket", False)):
             level_unique = bool(
@@ -171,17 +213,35 @@ class FinalCoverResolver:
         observed_title_confidence: float = 0.0,
         selection: Any | None = None,
         repository: LocalChartRepository | None = None,
+        require_observed_title: bool = False,
+        allow_missing_level: bool = False,
+        reject_member_loading: bool = False,
     ) -> None:
         if selection is None and repository is None:
             raise ValueError("缺少最终封面谱面解析器")
+        self.reject_member_loading = bool(reject_member_loading)
+        if self.reject_member_loading:
+            member_loading_icon()
+            print("FinalCover member_loading_guard=enabled", flush=True)
         self.difficulty = str(difficulty).strip().lower()
         self.observed_level = (
             None if observed_level is None else int(observed_level)
         )
-        self.observed_title = (
-            None if observed_title is None else str(observed_title).strip()
+        self.require_observed_title = bool(require_observed_title)
+        self.allow_missing_level = bool(allow_missing_level)
+        trusted_initial_title = (
+            observed_title is not None
+            and float(observed_title_confidence or 0.0) >= 0.7
         )
-        self._observed_title_confidence = float(observed_title_confidence or 0.0)
+        self.observed_title = (
+            str(observed_title).strip()
+            if trusted_initial_title or not self.require_observed_title
+            else None
+        )
+        self._observed_title_confidence = (
+            float(observed_title_confidence or 0.0)
+            if self.observed_title else 0.0
+        )
         self.repository = repository
         self.gate = (
             FinalCoverGate(
@@ -189,6 +249,7 @@ class FinalCoverResolver:
                 difficulty=self.difficulty,
                 observed_level=self.observed_level,
                 observed_title=self.observed_title,
+                allow_missing_level=self.allow_missing_level,
             )
             if selection is not None else None
         )
@@ -198,10 +259,64 @@ class FinalCoverResolver:
         self._candidate_frames = 0
         # 退化诊断：每个新指纹只打一条日志，避免逐帧刷屏。
         self._logged_fingerprints: set[str] = set()
+        # Per-frame visibility remains in last_reason. A loading transition
+        # must not erase a concrete identity conflict from an earlier cover.
+        self._retained_failure_reason: str | None = None
+        self._retained_failure_priority = 0
+        self._retained_failure_fingerprint: str | None = None
+        self._latest_failed_fingerprint: str | None = None
+        self._resolution_attempted = False
 
     @property
     def observed_title_confidence(self) -> float:
         return self._observed_title_confidence
+
+    @property
+    def failure_reason(self) -> str:
+        """The strongest failed identity check, or current visibility state."""
+        return self._retained_failure_reason or self.last_reason
+
+    @property
+    def failure_diagnostics(self) -> dict[str, object]:
+        return {
+            "blocking_reason": self.failure_reason,
+            "resolution_attempted": self._resolution_attempted,
+            "failed_fingerprint": self._latest_failed_fingerprint,
+            "blocking_fingerprint": self._retained_failure_fingerprint,
+            "observed_title": self.observed_title,
+            "observed_title_confidence": self._observed_title_confidence,
+            "observed_level": self.observed_level,
+            "difficulty": self.difficulty,
+        }
+
+    def _retain_resolution_failure(
+        self, reason: str, fingerprint: str | None = None,
+    ) -> None:
+        if reason in {
+            "final cover jacket is not visible",
+            "waiting for stable final cover jacket",
+            "final cover has not been observed",
+        }:
+            return
+        self._resolution_attempted = True
+        self._latest_failed_fingerprint = fingerprint
+        # Difficulty/level constraints and ambiguous mappings explain why a
+        # known candidate was rejected. Keep them over an unrelated hash miss.
+        priority = (
+            3 if any(word in reason for word in ("difficulty", "level", "ambiguous"))
+            else 2 if any(word in reason for word in ("conflicts", "local", "title"))
+            else 1
+        )
+        if priority >= self._retained_failure_priority:
+            self._retained_failure_reason = reason
+            self._retained_failure_priority = priority
+            self._retained_failure_fingerprint = fingerprint
+
+    def _clear_resolution_failure(self) -> None:
+        self._retained_failure_reason = None
+        self._retained_failure_priority = 0
+        self._retained_failure_fingerprint = None
+        self._latest_failed_fingerprint = None
 
     def refresh_observed_title(self, text: str, confidence: float) -> bool:
         """用最终封面页自身的标题 OCR 刷新准备页标题。
@@ -239,7 +354,7 @@ class FinalCoverResolver:
     def evidence_reason(self) -> str | None:
         if not self.difficulty:
             return "preparation difficulty is missing"
-        if self.observed_level is None:
+        if self.observed_level is None and not self.allow_missing_level:
             return "preparation song level is missing"
         if self.gate is not None:
             return self.gate.evidence_reason()
@@ -247,14 +362,24 @@ class FinalCoverResolver:
 
     def observe(self, image: Any) -> FinalCoverResolution | None:
         self.frames += 1
+        if self.reject_member_loading and is_member_loading_screen(image):
+            # 加载页即使稳定多帧也不能确认；出现该页会中断连续候选计数。
+            self._candidate_song_id = UNKNOWN_SONG_ID
+            self._candidate_frames = 0
+            self.last_reason = "member loading screen"
+            return None
         if self.gate is not None:
             confirmation = self.gate.observe(image)
             self.last_reason = self.gate.last_reason
             if confirmation is None:
+                self._retain_resolution_failure(self.last_reason)
                 return None
+            self._clear_resolution_failure()
             return FinalCoverResolution(
                 confirmation=confirmation,
                 selection=self.gate.selection,
+                observed_title=self.observed_title,
+                observed_title_confidence=self._observed_title_confidence,
             )
 
         identity = identify_final_song(image)
@@ -274,6 +399,10 @@ class FinalCoverResolver:
         # 协力加载画面会短暂经过多张高纹理图片，连续两帧稳定后才查谱面。
         if self._candidate_frames < 2:
             self.last_reason = "waiting for stable final cover jacket"
+            return None
+        if self.require_observed_title and not self.observed_title:
+            self.last_reason = "final cover title is not confirmed"
+            self._retain_resolution_failure(self.last_reason, identity.song_id)
             return None
 
         assert self.repository is not None
@@ -295,16 +424,19 @@ class FinalCoverResolver:
                     flush=True,
                 )
             self.last_reason = resolution.reason
+            self._retain_resolution_failure(self.last_reason, identity.song_id)
             return None
         gate = FinalCoverGate(
             resolution.selection,
             difficulty=self.difficulty,
             observed_level=self.observed_level,
             observed_title=self.observed_title,
+            allow_missing_level=self.allow_missing_level,
         )
         confirmation = gate.observe(image)
         self.last_reason = gate.last_reason
         if confirmation is None:
+            self._retain_resolution_failure(self.last_reason, identity.song_id)
             if (
                 gate.last_reason == "final cover jacket does not match selected chart"
                 and identity.song_id not in self._logged_fingerprints
@@ -320,7 +452,10 @@ class FinalCoverResolver:
                 )
             return None
         self.gate = gate
+        self._clear_resolution_failure()
         return FinalCoverResolution(
             confirmation=confirmation,
             selection=resolution.selection,
+            observed_title=self.observed_title,
+            observed_title_confidence=self._observed_title_confidence,
         )

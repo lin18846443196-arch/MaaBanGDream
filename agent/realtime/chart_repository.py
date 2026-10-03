@@ -10,12 +10,13 @@ from pathlib import Path
 from typing import Any
 
 from .chart_timeline import ChartTimeline
+from .regional_difficulty import verified_level_variants
 from .song_identity import (
     LOOSE_SAME_SONG_DISTANCE,
     UNKNOWN_SONG_ID,
     same_song,
 )
-from .song_title_ocr import title_similarity
+from .song_title_ocr import normalize_song_title, title_similarity
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +42,45 @@ class ChartResolution:
     reason: str
 
 
+@dataclass(frozen=True, slots=True)
+class CatalogSongIdentity:
+    bestdori_song_id: int
+    title: str
+    titles: tuple[str, ...]
+    fingerprints: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogSongResolution:
+    identity: CatalogSongIdentity | None
+    reason: str
+
+
+def _coalesce_equivalent_charts(songs: list[dict[str, Any]], difficulty: str) -> list[dict[str, Any]]:
+    """Collapse aliases only when their playable chart and cover agree.
+
+    CN entries 786/790 share an Expert chart, but not all difficulties.
+    The selected file still passes normal content-hash validation below.
+    """
+    unique: dict[tuple, dict[str, Any]] = {}
+    unresolved = []
+    for song in songs:
+        entry = song.get("difficulties", {}).get(difficulty, {})
+        digest = entry.get("chart_sha256", "")
+        fingerprints = tuple(sorted(song.get("fingerprints", ())))
+        if not re.fullmatch(r"[0-9a-f]{64}", str(digest)) or not fingerprints:
+            unresolved.append(song)
+            continue
+        key = (digest, entry.get("level"), entry.get("expected_notes"),
+               fingerprints, _catalog_song_is_full(song),
+               tuple(sorted({normalize_song_title(title)
+                             for title in song.get("titles", ())})))
+        prior = unique.get(key)
+        if prior is None or int(song["bestdori_song_id"]) < int(prior["bestdori_song_id"]):
+            unique[key] = song
+    return list(unique.values()) + unresolved
+
+
 class LocalChartRepository:
     """Resolve a confirmed song fingerprint and exact difficulty locally."""
 
@@ -50,6 +90,83 @@ class LocalChartRepository:
         self.root = Path(root).resolve()
         self.manifest_path = self.root / "manifest.json"
 
+    def identify_by_cover_title(
+        self,
+        song_fingerprint: str,
+        title: str,
+        *,
+        full_badge: bool | None = None,
+    ) -> CatalogSongResolution:
+        """只用开场封面与标题确认歌曲，不要求该难度已有本地谱面。"""
+        if song_fingerprint == UNKNOWN_SONG_ID:
+            return CatalogSongResolution(None, "song fingerprint is unknown")
+        if not str(title).strip():
+            return CatalogSongResolution(None, "song title is not confirmed")
+        songs = self._load_manifest()["songs"]
+        songs = _coalesce_equivalent_songs(songs)
+        cover_matches = [
+            song for song in songs
+            if any(
+                same_song(song_fingerprint, confirmed)
+                for confirmed in song["fingerprints"]
+            )
+        ]
+        if not cover_matches:
+            # 一键监听没有准备页等级可作第二重约束。只有标题先独立收窄出
+            # 候选后，才允许用宽松封面阈值吸收开场页裁切和边框差异。
+            title_scope = _unique_title_matches(songs, title)
+            cover_matches = [
+                song for song in title_scope
+                if any(
+                    same_song(
+                        song_fingerprint,
+                        confirmed,
+                        max_distance=LOOSE_SAME_SONG_DISTANCE,
+                    )
+                    for confirmed in song["fingerprints"]
+                )
+            ]
+        if not cover_matches:
+            return CatalogSongResolution(
+                None,
+                "song fingerprint is not confirmed",
+            )
+        if full_badge is not None:
+            badge_matches = [
+                song for song in cover_matches
+                if _catalog_song_is_full(song) is bool(full_badge)
+            ]
+            if not badge_matches:
+                return CatalogSongResolution(
+                    None,
+                    "FULL badge conflicts with final cover candidates",
+                )
+            cover_matches = badge_matches
+        title_matches = _unique_title_matches(cover_matches, title)
+        if not title_matches:
+            return CatalogSongResolution(
+                None,
+                "song title does not match final cover",
+            )
+        if len(title_matches) != 1:
+            return CatalogSongResolution(
+                None,
+                "song cover and title mapping is ambiguous",
+            )
+        song = title_matches[0]
+        titles = tuple(str(value) for value in song.get("titles", ()))
+        return CatalogSongResolution(
+            CatalogSongIdentity(
+                bestdori_song_id=int(song["bestdori_song_id"]),
+                title=str(song.get("display_title") or titles[0]),
+                titles=titles,
+                fingerprints=tuple(
+                    str(value) for value in song.get("fingerprints", ())
+                ),
+            ),
+            "confirmed song by final cover and title",
+        )
+
     def resolve(
         self,
         song_fingerprint: str,
@@ -57,9 +174,21 @@ class LocalChartRepository:
         *,
         level: int | None = None,
         title: str | None = None,
+        bestdori_song_id: int | None = None,
     ) -> ChartResolution:
         manifest = self._load_manifest()
         songs = manifest["songs"]
+        if bestdori_song_id is not None:
+            songs = [
+                song for song in songs
+                if int(song["bestdori_song_id"]) == int(bestdori_song_id)
+            ]
+            if not songs:
+                return ChartResolution(
+                    None,
+                    "confirmed song id is not present in local catalog",
+                )
+        songs = _coalesce_equivalent_songs(songs)
         if title and _FULL_TITLE_PREFIX.match(re.sub(r"['\"‘’]", "", str(title))):
             # 明确读到 FULL 就是版本证据，不能被首尾噪声裁剪抹成普通版。
             songs = [song for song in songs if any(
@@ -73,6 +202,7 @@ class LocalChartRepository:
                 for confirmed in song["fingerprints"]
             )
         ]
+        matched_exact_fingerprint = bool(fingerprint_matches)
         if not fingerprint_matches and level is not None:
             # 选曲页封面裁切/边框会让个别谱面稳定多翻转几 bit；只有同时
             # 读到等级时才用更宽阈值重试，随后仍由等级硬约束唯一化。
@@ -94,15 +224,20 @@ class LocalChartRepository:
             expected_level = int(level)
             level_scope = [
                 song for song in songs
-                if _difficulty_level(song, normalized_difficulty)
-                == expected_level
+                if _difficulty_level_matches(
+                    song, normalized_difficulty, expected_level,
+                )
             ]
-            if not level_scope:
+            level_matches = [song for song in matches if song in level_scope]
+            if (
+                matched_exact_fingerprint
+                and matches
+                and not level_matches
+            ):
                 return ChartResolution(
                     None,
                     "selected song level does not match local chart metadata",
                 )
-            level_matches = [song for song in matches if song in level_scope]
             matched_by_level = (
                 len(level_matches) == 1 and len(matches) != 1
             )
@@ -131,13 +266,16 @@ class LocalChartRepository:
                     ),
                 )
             return ChartResolution(None, "song fingerprint is not confirmed")
+        matches = _coalesce_equivalent_charts(matches, normalized_difficulty)
         if len(matches) != 1:
             return ChartResolution(None, "song fingerprint mapping is ambiguous")
 
         song = matches[0]
         if (
             level is not None
-            and _difficulty_level(song, normalized_difficulty) != int(level)
+            and not _difficulty_level_matches(
+                song, normalized_difficulty, int(level),
+            )
         ):
             return ChartResolution(
                 None,
@@ -168,13 +306,15 @@ class LocalChartRepository:
             "expected_notes",
             payload.get("difficulty", {}).get("expected_notes"),
         )
-        selected_level = _difficulty_level(song, normalized_difficulty)
-        same_level_shared = sum(
-            1
-            for candidate in fingerprint_matches
-            if _difficulty_level(candidate, normalized_difficulty)
-            == selected_level
+        selected_level = int(level) if level is not None else _difficulty_level(
+            song, normalized_difficulty,
         )
+        same_level_shared = len(_coalesce_equivalent_charts([
+            candidate for candidate in fingerprint_matches
+            if selected_level is not None and _difficulty_level_matches(
+                candidate, normalized_difficulty, selected_level,
+            )
+        ], normalized_difficulty))
         return ChartResolution(
             ChartSelection(
                 bestdori_song_id=song["bestdori_song_id"],
@@ -242,6 +382,47 @@ class LocalChartRepository:
             raise ValueError(f"cannot read local chart data {path}: {exc}") from exc
 
 
+def _coalesce_equivalent_songs(songs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    # 同名、同封面不能证明谱面相同。只接受有完整难度超集且每个重叠难度
+    # 的等级、判定数和内容 SHA 均相同的条目；保留最完整条目的真实 ID/文件。
+    groups: dict[tuple, list[dict[str, Any]]] = {}
+    for song in songs:
+        titles = tuple(sorted({
+            normalize_song_title(value) for value in song.get("titles", ())
+        }))
+        fingerprints = tuple(sorted(set(song["fingerprints"])))
+        key = (
+            (titles, fingerprints)
+            if titles and all(titles) and fingerprints
+            else (song["bestdori_song_id"],)
+        )
+        groups.setdefault(key, []).append(song)
+    result = []
+    for group in groups.values():
+        canonical = min(group, key=lambda song: (
+            -len(song["difficulties"]), song["bestdori_song_id"],
+        ))
+        entries = canonical["difficulties"]
+        compatible = bool(entries) and all(
+            bool(song["difficulties"])
+            and all(
+                difficulty in entries
+                and re.fullmatch(
+                    r"[0-9a-f]{64}", str(entry.get("chart_sha256", "")),
+                ) is not None
+                and entry.get("level") is not None
+                and all(
+                    entry.get(field) == entries[difficulty].get(field)
+                    for field in ("chart_sha256", "level", "expected_notes")
+                )
+                for difficulty, entry in song["difficulties"].items()
+            )
+            for song in group
+        )
+        result.extend([canonical] if compatible else group)
+    return result
+
+
 def _chart_sha256(chart: list[dict[str, Any]]) -> str:
     canonical = json.dumps(
         chart,
@@ -260,6 +441,22 @@ def _difficulty_level(song: dict[str, Any], difficulty: str) -> int | None:
         return int(entry["level"])
     except (TypeError, ValueError):
         return None
+
+
+def _difficulty_level_matches(
+    song: dict[str, Any], difficulty: str, observed_level: int,
+) -> bool:
+    entry = song.get("difficulties", {}).get(difficulty)
+    if not isinstance(entry, dict):
+        return False
+    expected_level = _difficulty_level(song, difficulty)
+    if expected_level == int(observed_level):
+        return True
+    return int(observed_level) in verified_level_variants(
+        int(song["bestdori_song_id"]),
+        difficulty,
+        entry.get("chart_sha256"),
+    )
 
 
 def _unique_title_matches(
@@ -309,3 +506,11 @@ def _local_title_match_forms(title: Any) -> tuple[str, ...]:
     if without_full and without_full != value:
         return value, without_full
     return (value,)
+
+
+def _catalog_song_is_full(song: dict[str, Any]) -> bool:
+    """曲库条目是否明确属于带 FULL 前缀的长谱面。"""
+    return any(
+        _FULL_TITLE_PREFIX.match(str(title))
+        for title in song.get("titles", ())
+    )

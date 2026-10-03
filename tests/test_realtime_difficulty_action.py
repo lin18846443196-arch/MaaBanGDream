@@ -31,7 +31,10 @@ def difficulty_frame(selected: str | None):
     if selected:
         x, y = DIFFICULTY_TARGETS[selected]
         hsv[y - 30:y + 20, x - 25:x + 25] = (20, 180, 255)
-    return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+    image = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+    for x, y in DIFFICULTY_TARGETS.values():
+        cv2.circle(image, (x, y), 43, (125, 125, 125), 2, cv2.LINE_AA)
+    return image
 
 
 def difficulty_frame_with_level(selected: str, level: int):
@@ -62,6 +65,16 @@ def test_hard_never_confirms_when_easy_is_selected():
 
 def test_no_coloured_selection_is_not_confirmed():
     assert selected_difficulty(difficulty_frame(None)) is None
+
+
+def test_default_difficulty_rejects_colour_on_a_non_selection_page():
+    hsv = np.zeros((720, 1280, 3), dtype=np.uint8)
+    hsv[:, :, 2] = 220
+    x, y = DIFFICULTY_TARGETS["Easy"]
+    hsv[y - 30:y + 20, x - 25:x + 25] = (170, 180, 255)
+    image = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+
+    assert selected_difficulty(image) is None
 
 
 def test_song_level_reader_recognizes_high_contrast_two_digit_level():
@@ -150,6 +163,56 @@ def test_successful_difficulty_verification_resets_and_identifies_the_round(monk
     assert current.song_id_method == SONG_ID_METHOD
     assert controller.screencaps == 4
     assert controller.clicks == [DIFFICULTY_TARGETS["Expert"]]
+
+
+def test_difficulty_only_mode_records_effective_choice_without_reading_identity(
+    monkeypatch,
+):
+    controller = DifficultyController(difficulty_frame("Expert"))
+    context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=controller),
+    )
+    argv = SimpleNamespace(custom_action_param=json.dumps({
+        "difficulty": "Special",
+        "fallback_difficulties": ["Expert"],
+        "identity_read": False,
+        "mode": "medley",
+        "verify_delay_seconds": 0,
+        "max_attempts": 1,
+    }))
+    monkeypatch.setattr(difficulty_action, "require_game_foreground", lambda _: None)
+    monkeypatch.setattr(difficulty_action.time, "sleep", lambda _: None)
+    monkeypatch.setattr(
+        difficulty_action,
+        "identify_song",
+        lambda _image: (_ for _ in ()).throw(
+            AssertionError("仅选难度时不应读取歌曲封面")
+        ),
+    )
+
+    assert RealtimeDifficultySelect().run(context, argv)
+
+    current = current_live_run()
+    assert current is not None
+    assert current.mode == "medley"
+    assert current.requested_difficulty == "Special"
+    assert current.difficulty == "Expert"
+    assert current.song_id == UNKNOWN_SONG_ID
+    assert current.song_level is None
+    assert current.prepared_for_play is False
+    assert controller.screencaps == 4
+
+
+def test_medley_difficulty_sends_no_click_outside_selection_page(monkeypatch):
+    controller = DifficultyController(np.zeros((720, 1280, 3), dtype=np.uint8))
+    context = SimpleNamespace(tasker=SimpleNamespace(stopping=False, controller=controller))
+    argv = SimpleNamespace(custom_action_param=json.dumps({
+        "difficulty": "Hard", "mode": "medley", "identity_read": False,
+    }))
+
+    assert RealtimeDifficultySelect().run(context, argv) is False
+    assert controller.clicks == []
+    assert controller.screencaps == 1
 
 
 def test_formal_round_can_continue_with_unknown_song_without_stale_identity(monkeypatch):
@@ -282,3 +345,77 @@ def test_ambiguous_shared_jacket_retries_level_and_title_without_reclick(
         (None, None),
         (26, "ON YOUR MARK"),
     ]
+
+
+def test_special_can_fallback_to_expert_and_records_effective_difficulty(
+    monkeypatch,
+):
+    controller = DifficultyController(difficulty_frame("Expert"))
+    context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=controller),
+    )
+    argv = SimpleNamespace(custom_action_param=json.dumps({
+        "difficulty": "Special",
+        "fallback_difficulties": ["Expert"],
+        "max_attempts": 1,
+        "identity_read_attempts": 1,
+        "verify_delay_seconds": 0,
+        "song_identity": False,
+        "mode": "cooperative",
+    }))
+    monkeypatch.setattr(difficulty_action, "require_game_foreground", lambda _: None)
+    monkeypatch.setattr(difficulty_action.time, "sleep", lambda _: None)
+    monkeypatch.setattr(difficulty_action, "recognize_song_title", lambda _, **kwargs: None)
+
+    assert RealtimeDifficultySelect().run(context, argv)
+
+    current = current_live_run()
+    assert current is not None
+    assert current.requested_difficulty == "Special"
+    assert current.difficulty == "Expert"
+    assert current.prepared_for_play is True
+    assert controller.clicks == [
+        DIFFICULTY_TARGETS["Special"],
+        DIFFICULTY_TARGETS["Expert"],
+    ]
+
+
+def test_special_without_fallback_fails_with_specific_reason(monkeypatch):
+    controller = DifficultyController(difficulty_frame("Expert"))
+    context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=controller),
+    )
+    argv = SimpleNamespace(custom_action_param=json.dumps({
+        "difficulty": "Special",
+        "max_attempts": 1,
+        "verify_delay_seconds": 0,
+    }))
+    reasons = []
+    monkeypatch.setattr(difficulty_action, "require_game_foreground", lambda _: None)
+    monkeypatch.setattr(difficulty_action.time, "sleep", lambda _: None)
+    monkeypatch.setattr(difficulty_action, "record_failure_reason", reasons.append)
+
+    assert RealtimeDifficultySelect().run(context, argv) is False
+    assert reasons == ["当前歌曲没有 Special 难度或 Special 按钮不可选择"]
+    assert current_live_run().prepared_for_play is False
+
+
+def test_auto_live_verification_does_not_replace_realtime_round(monkeypatch):
+    stale = reset_live_run(mode="formal", difficulty="Expert")
+    controller = DifficultyController(difficulty_frame("Special"))
+    context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=controller),
+    )
+    argv = SimpleNamespace(custom_action_param=json.dumps({
+        "difficulty": "Special",
+        "max_attempts": 1,
+        "verify_delay_seconds": 0,
+        "track_live_run": False,
+        "song_identity": False,
+    }))
+    monkeypatch.setattr(difficulty_action, "require_game_foreground", lambda _: None)
+    monkeypatch.setattr(difficulty_action.time, "sleep", lambda _: None)
+
+    assert RealtimeDifficultySelect().run(context, argv)
+    assert current_live_run() is stale
+    assert controller.screencaps == 1

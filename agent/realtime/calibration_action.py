@@ -36,8 +36,7 @@ from .runtime_options import (
     diagnostic_trace_enabled,
 )
 from .difficulty_action import DIFFICULTY_TARGETS
-from .game_effect_settings_action import verified_game_visual_settings
-from .live_session import append_current_run_event, current_song_id
+from .live_session import append_current_run_event, current_song_id, current_live_run, update_live_run
 from .song_identity import UNKNOWN_SONG_ID
 
 
@@ -344,16 +343,10 @@ class RealtimeCalibration(CustomAction):
         resume_mode = calibration_resume_mode()
         round_number = 0
 
-        visual = verified_game_visual_settings()
-        if visual is None:
-            raise RuntimeError("校准未经过游戏视觉设置读回验证")
         image = context.tasker.controller.post_screencap().wait().get()
         signature = EnvironmentSignature(
             frame_resolution(image), 240, 60, "standard", note_speed,
-            visual.note_skin_type,
-            visual.tap_effect,
-            visual.judgement_assist_effect,
-            engine_from_native_flag(
+            engine=engine_from_native_flag(
                 runtime_options.get("native_realtime_enabled", False)
             ),
         )
@@ -412,6 +405,8 @@ class RealtimeCalibration(CustomAction):
                 song_mode=song_mode,
                 excluded_song_ids=list(session.get("used_song_ids", [])),
             )
+            if current_live_run() is not None:
+                update_live_run(play_completed=False)
             detail = context.run_task(CALIBRATION_ROUND_ENTRY, override)
             if context.tasker.stopping:
                 raise InterruptedError("校准已停止")
@@ -433,7 +428,7 @@ class RealtimeCalibration(CustomAction):
                 status = None if detail is None else detail.status
                 return {
                     "valid": False,
-                    "completed": False,
+                    "completed": bool(current_live_run() and current_live_run().play_completed),
                     "technical_reason": f"校准单轮 Maa 任务执行失败: {status}",
                 }
             try:
@@ -448,7 +443,7 @@ class RealtimeCalibration(CustomAction):
             except Exception as exc:
                 return {
                     "valid": False,
-                    "completed": False,
+                    "completed": bool(current_live_run() and current_live_run().play_completed),
                     "technical_reason": f"结算报告不可用: {type(exc).__name__}: {exc}",
                 }
             report["valid"] = bool(
@@ -566,6 +561,14 @@ class RealtimeCalibration(CustomAction):
                         session.get("terminal_reason")
                         or "校准单轮结算无效"
                     )
+                    if (
+                        record.get("valid") is False and record.get("completed") is True
+                        and not record.get("life_failed") and record.get("survived", True)
+                    ):
+                        # 原有重试预算已耗尽：中性保留可续跑阶段，不能无限重演
+                        # 已完成歌曲，更不能把缺失成绩的候选 Profile 自动接受。
+                        print(f"RealtimeCalibration result_warning={reason}; pending_stage={stage}; profile_not_accepted=true", flush=True)
+                        return True
                     record_failure_reason(
                         f"实时演奏校准暂停于 {stage}：{reason}；"
                         "下次选择自动续跑会从本阶段继续"

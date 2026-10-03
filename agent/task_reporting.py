@@ -8,6 +8,7 @@ from typing import Any
 from maa.agent.agent_server import AgentServer
 from maa.context import Context
 from maa.custom_action import CustomAction
+from maa.custom_recognition import CustomRecognition
 
 
 @dataclass
@@ -39,11 +40,11 @@ def _task_id(context: Context, argv: CustomAction.RunArg) -> int:
     return id(context.tasker)
 
 
-def _positive_int(value: Any, default: int = 1) -> int:
-    try:
-        return max(1, int(value))
-    except (TypeError, ValueError):
-        return default
+def _performance_count(value: Any) -> int:
+    count = int(value)
+    if isinstance(value, bool) or str(value) != str(count) or not 0 <= count <= 999:
+        raise ValueError("演出次数必须是 0..999 的整数，0 表示无限")
+    return count
 
 
 def _state(
@@ -54,7 +55,7 @@ def _state(
     task_id = _task_id(context, argv)
     detail = getattr(argv, "task_detail", None)
     entry = str(getattr(detail, "entry", "Task"))
-    total = _positive_int(params.get("total", 1))
+    total = _performance_count(params.get("total", 1))
     task_name = str(params.get("task_name", entry))
     label = str(params.get("label", task_name))
     current = _states.get(task_id)
@@ -129,23 +130,49 @@ def active_task_ids() -> set[int]:
     return set(_states)
 
 
+@AgentServer.custom_recognition("TaskRoundAvailable")
+class TaskRoundAvailable(CustomRecognition):
+    """以实际入口命中数限制有限任务；无限任务不使用 max_hit。"""
+
+    def analyze(self, context: Context, argv: CustomRecognition.AnalyzeArg):
+        if context.tasker.stopping:
+            return None
+        try:
+            total = _performance_count(_params(argv.custom_recognition_param).get("total", 1))
+            if total == 0 or context.get_hit_count(argv.node_name) < total:
+                return (0, 0, 1, 1)
+            return None
+        except Exception as exc:
+            # 非法参数交给同节点的 TaskProgress 显式失败，不能误走成功终点。
+            record_failure_reason(f"演出次数无效：{exc}")
+            traceback.print_exc()
+            return (0, 0, 1, 1)
+
+
 @AgentServer.custom_action("TaskProgress")
 class TaskProgress(CustomAction):
-    """Report round progress without replacing MaaFramework max_hit."""
+    """记录有限或无限演出进度；入口次数门禁由 TaskRoundAvailable 负责。"""
 
     def run(self, context: Context, argv: CustomAction.RunArg) -> bool:
+        if context.tasker.stopping:
+            return True
         try:
             params = _params(argv.custom_action_param)
             _task_id_value, state = _state(context, argv, params)
             phase = str(params.get("phase", "start"))
+            limit = str(state.total) if state.total else "无限"
+
+            if phase == "initialize":
+                return True
 
             if phase == "start":
                 hit_count = int(context.get_hit_count(argv.node_name))
                 state.current = max(1, hit_count, state.current + 1)
-                state.current = min(state.current, state.total)
+                if state.total:
+                    state.current = min(state.current, state.total)
                 message = (
-                    f"{state.label}演奏次数：当前 {state.current}/{state.total}，"
-                    f"已完成 {state.completed}/{state.total}"
+                    f"{state.label}演奏次数：当前 {state.current}/{limit}，"
+                    f"已完成 {state.completed}/{limit}"
                 )
                 log_task(state.label, "进度", "INFO", message)
                 _visible_log(context, message)
@@ -153,11 +180,48 @@ class TaskProgress(CustomAction):
 
             if phase == "completed":
                 if state.current <= state.completed:
-                    state.current = min(state.total, state.completed + 1)
-                state.completed = min(state.total, max(state.completed, state.current))
+                    state.current = state.completed + 1
+                state.completed = max(state.completed, state.current)
+                if state.total:
+                    state.current = min(state.total, state.current)
+                    state.completed = min(state.total, state.completed)
                 message = (
                     f"{state.label}演奏次数：已完成 "
-                    f"{state.completed}/{state.total}"
+                    f"{state.completed}/{limit}"
+                )
+                log_task(state.label, "进度", "INFO", message)
+                _visible_log(context, message)
+                return True
+
+            if phase == "restore":
+                try:
+                    completed = int(params["completed"])
+                except (KeyError, TypeError, ValueError):
+                    log_task(
+                        state.label,
+                        "进度",
+                        "ERROR",
+                        "恢复进度缺少有效 completed",
+                    )
+                    return False
+                if completed < 0 or (state.total and completed > state.total):
+                    log_task(
+                        state.label,
+                        "进度",
+                        "ERROR",
+                        f"恢复进度超出范围：{completed}/{state.total}",
+                    )
+                    return False
+                next_started = bool(params.get("next_started", True))
+                state.completed = completed
+                state.current = (
+                    completed + 1
+                    if next_started and (state.total == 0 or completed < state.total)
+                    else completed
+                )
+                message = (
+                    f"{state.label}进度已恢复：当前 {state.current}/{limit}，"
+                    f"已完成 {state.completed}/{limit}"
                 )
                 log_task(state.label, "进度", "INFO", message)
                 _visible_log(context, message)
@@ -197,11 +261,13 @@ class TaskOutcome(CustomAction):
                 return True
 
             if status == "success":
-                completed = state.total
+                completed = state.completed if params.get("completed_only", False) else (state.total or state.completed)
                 message = (
                     f"{state.label}任务成功：已完成 "
-                    f"{completed}/{state.total}"
+                    f"{completed}/{state.total or '无限'}"
                 )
+                if reason:
+                    message += f"：{reason}"
                 log_task(state.label, "结束", "SUCCESS", message)
                 _visible_log(context, message, toast=True)
                 _states.pop(task_id, None)
@@ -211,7 +277,7 @@ class TaskOutcome(CustomAction):
             if str(params.get("reason_source", "")).lower() == "latest":
                 reason = _take_failure_reason() or reason
             message = (
-                f"任务失败，已完成 {state.completed}/{state.total}"
+                f"任务失败，已完成 {state.completed}/{state.total or '无限'}"
                 f"：{reason or '未提供失败原因'}"
             )
             log_task(state.label, "结束", "ERROR", message)

@@ -3,11 +3,138 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import shutil
 
 import pytest
 
 from agent.realtime.chart_repository import LocalChartRepository
 from agent.realtime.song_identity import UNKNOWN_SONG_ID
+
+
+PROJECT_CHART_ROOT = Path(__file__).resolve().parents[1] / "resource/charts"
+
+
+def test_marina_identical_chart_aliases_resolve_for_all_realtime_entry_points():
+    repository = LocalChartRepository(PROJECT_CHART_ROOT)
+    fingerprint = "song-jacket-phash-v2-ee919d62942bf20f"
+    title = "ときめきエクスペリエンス！ (月岛麻里奈ver.)"
+
+    # 准备页、协力和最终封面使用同一解析器；一键演奏先走曲库身份解析。
+    for difficulty, level in (("Hard", 20), ("Expert", 25), ("Special", 26)):
+        resolution = repository.resolve(fingerprint, difficulty, level=level, title=title)
+        assert resolution.selection is not None
+        assert resolution.selection.bestdori_song_id == 786
+        assert resolution.selection.shared_jacket is False
+    identity = repository.identify_by_cover_title(fingerprint, title)
+    assert identity.identity is not None
+    assert identity.identity.bestdori_song_id == 786
+    explicit = repository.resolve(fingerprint, "Expert", level=25, bestdori_song_id=790)
+    assert explicit.selection.bestdori_song_id == 790
+
+
+@pytest.mark.parametrize("song_id", (76, 762))
+def test_determination_parallel_version_keeps_its_own_cover_identity(song_id):
+    repository = LocalChartRepository(PROJECT_CHART_ROOT)
+    songs = json.loads(repository.manifest_path.read_text(encoding="utf-8"))["songs"]
+    song = next(item for item in songs if item["bestdori_song_id"] == song_id)
+    for difficulty, entry in song["difficulties"].items():
+        resolution = repository.resolve(song["fingerprints"][0], difficulty,
+                                        level=entry["level"], title=song["display_title"])
+        assert resolution.selection.bestdori_song_id == song_id
+    identity = repository.identify_by_cover_title(song["fingerprints"][0], song["display_title"])
+    assert identity.identity.bestdori_song_id == song_id
+
+
+@pytest.mark.parametrize("changed", ("chart_sha256", "level", "expected_notes", "titles", "fingerprints"))
+def test_equivalent_aliases_keep_conflicting_metadata_ambiguous(tmp_path, changed):
+    build_repository(tmp_path)
+    path = tmp_path / "manifest.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    duplicate = json.loads(json.dumps(manifest["songs"][0]))
+    duplicate["bestdori_song_id"] = 100
+    if changed == "titles":
+        duplicate[changed] = ["Different"]
+    elif changed == "fingerprints":
+        duplicate[changed] = ["song-jacket-phash-v2-0123456789abcdee"]
+    else:
+        duplicate["difficulties"]["hard"][changed] = {
+            "chart_sha256": "a" * 64, "level": 21, "expected_notes": 999,
+        }[changed]
+    manifest["songs"].append(duplicate)
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    resolution = LocalChartRepository(tmp_path).resolve(FINGERPRINT, "Hard")
+    assert resolution.selection is None
+    assert "ambiguous" in resolution.reason
+CN_EXPERT_LEVEL_CASES = (
+    # CN 实拍：蒼穹 Expert 27、黒のバースデイ Expert 26；当前全局
+    # Bestdori 元数据分别为 26/27，但谱面内容 SHA 没有变化。
+    (581, 27, 26, "1f265d0a59a144d9534468391b43ebfd10838ff354c0851d48be68ed452fcbff"),
+    (705, 26, 27, "fa39d04f14a90a9f838dd5caa36db9d87e3f15fda3ccf800a4a471330b299cc5"),
+)
+
+
+def _repository_with_current_global_expert_levels(root: Path) -> LocalChartRepository:
+    manifest = json.loads(
+        (PROJECT_CHART_ROOT / "manifest.json").read_text(encoding="utf-8")
+    )
+    songs = []
+    for song_id, _cn_level, global_level, digest in CN_EXPERT_LEVEL_CASES:
+        song = next(
+            item for item in manifest["songs"]
+            if item["bestdori_song_id"] == song_id
+        )
+        song = json.loads(json.dumps(song))
+        entry = song["difficulties"]["expert"]
+        assert entry["chart_sha256"] == digest
+        entry["level"] = global_level
+        source = PROJECT_CHART_ROOT / entry["path"]
+        target = root / entry["path"]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        songs.append(song)
+    (root / "manifest.json").write_text(json.dumps({
+        "schema_version": 1,
+        "songs": songs,
+    }), encoding="utf-8")
+    return LocalChartRepository(root)
+
+
+@pytest.mark.parametrize("song_id,cn_level,global_level,_digest", CN_EXPERT_LEVEL_CASES)
+def test_repository_accepts_verified_cn_expert_level_after_global_metadata_changes(
+    tmp_path, song_id, cn_level, global_level, _digest,
+):
+    repository = _repository_with_current_global_expert_levels(tmp_path)
+    manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+    song = next(item for item in manifest["songs"] if item["bestdori_song_id"] == song_id)
+
+    resolution = repository.resolve(
+        song["fingerprints"][0], "Expert", level=cn_level,
+    )
+
+    assert resolution.selection is not None
+    assert resolution.selection.bestdori_song_id == song_id
+    assert resolution.selection.level == cn_level
+    global_resolution = repository.resolve(
+        song["fingerprints"][0], "Expert", level=global_level,
+    )
+    assert global_resolution.selection is not None
+    assert global_resolution.selection.level == global_level
+
+
+@pytest.mark.parametrize("song_id,cn_level,_global_level,_digest", CN_EXPERT_LEVEL_CASES)
+def test_repository_reports_level_mismatch_for_wrong_known_cover_level(
+    tmp_path, song_id, cn_level, _global_level, _digest,
+):
+    repository = _repository_with_current_global_expert_levels(tmp_path)
+    manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+    song = next(item for item in manifest["songs"] if item["bestdori_song_id"] == song_id)
+
+    resolution = repository.resolve(
+        song["fingerprints"][0], "Expert", level=cn_level + 5,
+    )
+
+    assert resolution.selection is None
+    assert resolution.reason == "selected song level does not match local chart metadata"
 
 
 def test_explicit_full_title_disambiguates_shared_fire_bird_jacket():
@@ -19,6 +146,48 @@ def test_explicit_full_title_disambiguates_shared_fire_bird_jacket():
     assert repository.resolve(fingerprint, "Expert", level=27,
                               title="[FULL]FIRE BIRD").selection is None
     assert repository.resolve(fingerprint, "Expert", title="FIRE BIRD").selection is None
+    ordinary_identity = repository.identify_by_cover_title(
+        fingerprint,
+        "FIRE BIRD",
+        full_badge=False,
+    )
+    full_identity = repository.identify_by_cover_title(
+        fingerprint,
+        "FIRE BIRD",
+        full_badge=True,
+    )
+    assert ordinary_identity.identity.bestdori_song_id == 187
+    assert full_identity.identity.bestdori_song_id == 243
+    confirmed_full = repository.resolve(
+        fingerprint,
+        "Expert",
+        title="FIRE BIRD",
+        bestdori_song_id=243,
+    )
+    assert confirmed_full.selection.bestdori_song_id == 243
+
+
+def test_little_busters_continuous_cover_resolves_expert_chart():
+    repository = LocalChartRepository(
+        Path(__file__).resolve().parents[1] / "resource/charts"
+    )
+    identity = repository.identify_by_cover_title(
+        "song-jacket-phash-v2-c7b9cb102fcfb04a",
+        "Little Busters'!'",
+    )
+
+    assert identity.identity is not None
+    assert identity.identity.bestdori_song_id == 46
+    chart = repository.resolve(
+        identity.identity.fingerprints[0],
+        "Expert",
+        title="Little Busters'!'",
+        bestdori_song_id=identity.identity.bestdori_song_id,
+    )
+    assert chart.selection is not None
+    assert chart.selection.bestdori_song_id == 46
+    assert chart.selection.difficulty == "expert"
+    assert chart.selection.level == 25
 
 
 FINGERPRINT = "song-jacket-phash-v2-0123456789abcdef"
@@ -176,6 +345,58 @@ def test_repository_can_resolve_by_title_without_single_live_jacket(tmp_path):
     assert resolution.selection is not None
     assert resolution.selection.bestdori_song_id == 99
     assert resolution.reason == "confirmed local chart by song title"
+
+
+def test_repository_can_identify_song_without_requested_difficulty_chart(tmp_path):
+    build_repository(tmp_path)
+
+    resolution = LocalChartRepository(tmp_path).identify_by_cover_title(
+        FINGERPRINT,
+        "Song!",
+    )
+
+    assert resolution.identity is not None
+    assert resolution.identity.bestdori_song_id == 99
+    assert resolution.reason == "confirmed song by final cover and title"
+
+
+def test_repository_identity_allows_loose_cover_after_unique_title_match(tmp_path):
+    canonical = "song-jacket-phash-v2-c7bac9172dceb062"
+    observed = "song-jacket-phash-v2-c7b9cb102fcfb04a"
+    build_repository(tmp_path, fingerprints=[canonical])
+
+    resolution = LocalChartRepository(tmp_path).identify_by_cover_title(
+        observed,
+        "Song!",
+    )
+
+    assert resolution.identity is not None
+    assert resolution.identity.bestdori_song_id == 99
+
+
+def test_repository_identity_rejects_loose_cover_without_matching_title(tmp_path):
+    canonical = "song-jacket-phash-v2-c7bac9172dceb062"
+    observed = "song-jacket-phash-v2-c7b9cb102fcfb04a"
+    build_repository(tmp_path, fingerprints=[canonical])
+
+    resolution = LocalChartRepository(tmp_path).identify_by_cover_title(
+        observed,
+        "Different Song",
+    )
+
+    assert resolution.identity is None
+
+
+def test_repository_identity_requires_title_to_match_cover(tmp_path):
+    build_repository(tmp_path)
+
+    resolution = LocalChartRepository(tmp_path).identify_by_cover_title(
+        FINGERPRINT,
+        "Different Song",
+    )
+
+    assert resolution.identity is None
+    assert resolution.reason == "song title does not match final cover"
 
 
 def test_repository_uses_level_before_title_when_full_marker_is_not_ocrd(

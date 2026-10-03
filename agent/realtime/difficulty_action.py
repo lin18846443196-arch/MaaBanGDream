@@ -12,8 +12,12 @@ import numpy as np
 
 try:
     from ..foreground_guard import require_game_foreground
+    from ..task_reporting import record_failure_reason
+    from ..screen_refresh import capture_image
 except ImportError:  # AgentServer imports realtime as a top-level package.
     from foreground_guard import require_game_foreground
+    from task_reporting import record_failure_reason
+    from screen_refresh import capture_image
 
 from maa.agent.agent_server import AgentServer
 from maa.context import Context
@@ -205,11 +209,34 @@ def _should_retry_song_identity(resolution: ChartResolution) -> bool:
     )
 
 
+def song_selection_visible(image: np.ndarray) -> bool:
+    """用标准选曲页的大圆按钮布局确认页面，不读取歌曲身份。"""
+    if image.shape[:2] != (720, 1280):
+        return False
+    gray = cv2.cvtColor(image[490:595, 650:1250], cv2.COLOR_BGR2GRAY)
+    circles = cv2.HoughCircles(
+        gray, cv2.HOUGH_GRADIENT, 1, 80,
+        param1=100, param2=24, minRadius=35, maxRadius=49,
+    )
+    if circles is None:
+        return False
+    # Special 不可用时允许缺一枚；总览页的小圆按钮与综合力文字
+    # 不满足这里的尺寸、行位置和间距，不能冒充标准难度选择页。
+    matched = sum(
+        any(abs(cx + 650 - x) <= 12 and abs(cy + 490 - y) <= 15
+            for cx, cy, _radius in circles[0])
+        for x, y in DIFFICULTY_TARGETS.values()
+    )
+    return matched >= 4
+
+
 def selected_difficulty(
     image,
     targets: dict[str, tuple[int, int]] = DIFFICULTY_TARGETS,
 ) -> str | None:
     """Return the coloured difficulty button on the 1280x720 song screen."""
+    if targets == DIFFICULTY_TARGETS and not song_selection_visible(image):
+        return None
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
     scores = {}
     for name, (x, y) in targets.items():
@@ -226,28 +253,45 @@ class RealtimeDifficultySelect(CustomAction):
     def run(self, context: Context, argv: CustomAction.RunArg) -> bool:
         try:
             params = json.loads(argv.custom_action_param or "{}")
+            def capture_current():
+                if params.get('refresh_node'):
+                    return capture_image(context, node=params['refresh_node'])
+                return context.tasker.controller.post_screencap().wait().get()
             requested = str(params.get("difficulty", "Easy"))
             if requested not in DIFFICULTY_TARGETS:
                 raise ValueError(f"unsupported difficulty: {requested}")
             attempts = int(params.get("max_attempts", 3))
             if context.tasker.stopping:
                 return True
-            reset_live_run(
-                mode=str(params.get("mode", "realtime")),
-                difficulty=requested,
-                profile_name=params.get("profile_name"),
-                expected_note_speed=params.get("note_speed"),
-                debug_recording=bool(params.get("debug_recording", False)),
-            )
+            track_live_run = bool(params.get("track_live_run", True))
+            identity_read = bool(params.get("identity_read", True))
+            if track_live_run:
+                reset_live_run(
+                    mode=str(params.get("mode", "realtime")),
+                    difficulty=requested,
+                    requested_difficulty=requested,
+                    profile_name=params.get("profile_name"),
+                    expected_note_speed=params.get("note_speed"),
+                    debug_recording=bool(params.get("debug_recording", False)),
+                )
             controller = context.tasker.controller
             configured_targets = params.get("difficulty_targets", DIFFICULTY_TARGETS)
             targets = {
                 str(name): tuple(int(value) for value in point)
                 for name, point in configured_targets.items()
             }
+            fallback_value = params.get("fallback_difficulties", [])
+            if not isinstance(fallback_value, list):
+                raise ValueError("fallback_difficulties must be a list")
+            candidates = [requested]
+            for value in fallback_value:
+                candidate = str(value)
+                if candidate not in targets:
+                    raise ValueError(f"missing difficulty target: {candidate}")
+                if candidate not in candidates:
+                    candidates.append(candidate)
             if requested not in targets:
                 raise ValueError(f"missing difficulty target: {requested}")
-            target = targets[requested]
             level_roi = tuple(
                 int(value)
                 for value in params.get("song_level_roi", SONG_LEVEL_ROI)
@@ -258,21 +302,63 @@ class RealtimeDifficultySelect(CustomAction):
                 if title_roi_value is not None else None
             )
             use_song_identity = bool(params.get("song_identity", True))
-            for attempt in range(1, attempts + 1):
-                if context.tasker.stopping:
-                    return True
-                require_game_foreground(controller)
-                controller.post_click(*target).wait()
-                time.sleep(float(params.get("verify_delay_seconds", 0.35)))
-                image = controller.post_screencap().wait().get()
-                recognized = selected_difficulty(image, targets)
-                print(
-                    f"RealtimeDifficultySelect requested={requested} "
-                    f"target={target} attempt={attempt}/{attempts} "
-                    f"recognized={recognized}",
-                    flush=True,
-                )
-                if recognized == requested:
+            last_recognized = None
+            for candidate_index, effective in enumerate(candidates):
+                target = targets[effective]
+                for attempt in range(1, attempts + 1):
+                    if context.tasker.stopping:
+                        return True
+                    if params.get('page_guard'):
+                        before = capture_current()
+                        page = context.run_recognition(params['page_guard'], before)
+                        if not page or not page.hit:
+                            raise RuntimeError('难度选择页已改变，停止输入')
+                        controller = context.tasker.controller
+                        if context.tasker.stopping:
+                            return True
+                    if params.get("mode") == "medley":
+                        # 组曲随机选曲后再次核对页面，防止中途退回总览时
+                        # 仍向成员卡或综合力区域发送标准难度坐标。
+                        before = controller.post_screencap().wait().get()
+                        if not song_selection_visible(before):
+                            raise RuntimeError("当前不是歌曲选择页，停止组曲难度输入")
+                    require_game_foreground(controller)
+                    controller.post_click(*target).wait()
+                    time.sleep(float(params.get("verify_delay_seconds", 0.35)))
+                    image = capture_current()
+                    controller = context.tasker.controller
+                    recognized = selected_difficulty(image, targets)
+                    last_recognized = recognized
+                    print(
+                        f"RealtimeDifficultySelect requested={requested} "
+                        f"candidate={effective} target={target} "
+                        f"attempt={attempt}/{attempts} recognized={recognized}",
+                        flush=True,
+                    )
+                    if recognized != effective:
+                        continue
+                    if not track_live_run:
+                        print(
+                            "RealtimeDifficultySelect confirmed=true "
+                            f"requested={requested} effective={effective} "
+                            "track_live_run=false",
+                            flush=True,
+                        )
+                        return True
+                    if not identity_read:
+                        # 组曲选曲页只确认请求难度与实际难度；歌曲身份留到
+                        # 每一首自己的准备页或最终封面页读取。
+                        update_live_run(
+                            difficulty=effective,
+                            prepared_for_play=False,
+                        )
+                        print(
+                            "RealtimeDifficultySelect confirmed=true "
+                            f"requested={requested} effective={effective} "
+                            "identity_read=false",
+                            flush=True,
+                        )
+                        return True
                     identity_attempts = max(
                         1,
                         int(params.get("identity_read_attempts", 4)),
@@ -316,7 +402,7 @@ class RealtimeDifficultySelect(CustomAction):
                         )
                         chart_resolution = resolve_chart_for_selected_song(
                             identity.song_id,
-                            requested,
+                            effective,
                             song_level,
                             song_title,
                         )
@@ -356,9 +442,8 @@ class RealtimeDifficultySelect(CustomAction):
                         if context.tasker.stopping:
                             return True
                         time.sleep(identity_delay)
-                        identity_image = (
-                            controller.post_screencap().wait().get()
-                        )
+                        identity_image = capture_current()
+                        controller = context.tasker.controller
 
                     assert best_reading is not None
                     (
@@ -373,6 +458,7 @@ class RealtimeDifficultySelect(CustomAction):
                         if title_reading is not None else None
                     )
                     update_live_run(
+                        difficulty=effective,
                         song_id=identity.song_id,
                         song_id_method=identity.method,
                         song_level=song_level,
@@ -385,6 +471,7 @@ class RealtimeDifficultySelect(CustomAction):
                     )
                     print(
                         "RealtimeDifficultySelect "
+                        f"requested={requested} effective={effective} "
                         f"song={identity.song_id} method={identity.method} "
                         f"song_level={song_level} "
                         f"song_title={song_title!r} "
@@ -393,13 +480,33 @@ class RealtimeDifficultySelect(CustomAction):
                         flush=True,
                     )
                     return True
+                if candidate_index + 1 < len(candidates):
+                    print(
+                        "RealtimeDifficultySelect fallback=true "
+                        f"requested={requested} unavailable={effective} "
+                        f"next={candidates[candidate_index + 1]}",
+                        flush=True,
+                    )
+            reason = (
+                "当前歌曲没有 Special 难度或 Special 按钮不可选择"
+                if requested == "Special"
+                else f"未能识别或切换到请求的 {requested} 难度"
+            )
+            if len(candidates) > 1:
+                reason += "，允许的回退难度也不可选择"
+            record_failure_reason(reason)
             print(
                 f"RealtimeDifficultySelect failed requested={requested} "
-                f"target={target} attempts={attempts}",
+                f"candidates={candidates} attempts={attempts} "
+                f"last_recognized={last_recognized} reason={reason}",
                 flush=True,
             )
             return False
         except Exception as exc:
+            if not context.tasker.stopping:
+                record_failure_reason(
+                    f"难度选择异常：{type(exc).__name__}: {exc}"
+                )
             traceback.print_exc()
             print(f"RealtimeDifficultySelect failed={type(exc).__name__}: {exc}", flush=True)
             return False

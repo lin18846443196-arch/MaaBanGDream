@@ -1,3 +1,4 @@
-- 开源代码：[GitHub](https://github.com/coatcn1/MaaBanGDream)
-- 使用说明：[README](https://github.com/coatcn1/MaaBanGDream#readme)
-- 问题反馈：[GitHub Issues](https://github.com/coatcn1/MaaBanGDream/issues)
+- 源码仓库：[GitHub](https://github.com/lin18846443196-arch/MaaBanGDream)
+- 使用说明：[README](https://github.com/lin18846443196-arch/MaaBanGDream#readme)
+- 问题反馈：[GitHub Issues](https://github.com/lin18846443196-arch/MaaBanGDream/issues)
+- 上游项目：[MaaBanGDream](https://github.com/coatcn1/MaaBanGDream)
