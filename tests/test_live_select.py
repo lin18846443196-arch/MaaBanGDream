@@ -9,6 +9,8 @@ from agent import live_select
 
 
 class Job:
+    succeeded = True
+
     def __init__(self, result=None):
         self.result = result
 

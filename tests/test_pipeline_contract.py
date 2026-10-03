@@ -75,12 +75,12 @@ def test_all_pipeline_clicks_use_the_foreground_guard():
 def test_interface_references_existing_entry_and_resource():
     interface = load(ROOT / "interface.json")
     assert interface["interface_version"] == 2
-    assert interface["version"] == "1.4.5"
+    assert interface["version"] == "1.5.0"
     assert interface["license"] == "PolyForm-Noncommercial-1.0.0"
-    assert interface["github"] == "https://github.com/coatcn1/MaaBanGDream"
+    assert interface["github"] == "https://github.com/lin18846443196-arch/MaaBanGDream"
     assert "mirrorchyan_rid" not in interface
     assert [task["name"] for task in interface["task"]] == [
-        "AutoLive", "RealtimeLive", "CooperativeLive", "ContinuousRealtimeLive",
+        "AutoLive", "RealtimeLive", "CooperativeLive", "TeamLive", "ContinuousRealtimeLive",
         "RealtimeCalibration", "DailyFreeGacha", "ChallengeLive",
         "MedleyLive", "ManualFlowRecording",
     ]
@@ -90,6 +90,7 @@ def test_interface_references_existing_entry_and_resource():
         "AutoLive": "🎶 自动演出",
         "RealtimeLive": "🎹 单人实时演奏",
         "CooperativeLive": "🤝 协力演出",
+        "TeamLive": "👥 团队演出",
         "ContinuousRealtimeLive": "⚡ 一键实时演奏",
         "RealtimeCalibration": "🎯 实时演奏校准",
         "DailyFreeGacha": "🎁 每日免费抽卡",
@@ -209,7 +210,6 @@ def test_all_home_live_click_markers_use_the_validated_threshold():
         "auto_live.json",
         "realtime_multi_live.json",
         "cooperative_live.json",
-        "challenge_live.json",
     )):
         nodes = json.loads(path.read_text(encoding="utf-8"))
         markers = [
@@ -1056,14 +1056,24 @@ def test_task_entries_bootstrap_before_round_execution():
         guard = nodes[guard_name]
         assert guard["custom_action"] == "ProcessConflictGuard"
         expected_next = recover_name or gate_name
-        assert guard["next"] == [expected_next]
+        if filename == "cooperative_live.json":
+            assert guard["next"] == ["CooperativeEntryConfigure"]
+        elif filename == "challenge_live.json":
+            assert guard["next"] == ["ChallengeDisconnectJumpConfigure"]
+            assert nodes["ChallengeDisconnectJumpConfigure"]["next"] == [recover_name]
+        else:
+            assert guard["next"] == [expected_next]
         assert guard["on_error"]
         if recover_name:
             recover = nodes[recover_name]
-            assert recover["custom_action"] == "CommonRecover"
+            assert recover["custom_action"] == (
+                "CooperativeLiveRecover" if filename == "cooperative_live.json" else "CommonRecover"
+            )
             assert recover["custom_action_param"]["escape_timeout_ms"] == 60000
             assert recover["custom_action_param"]["restart_limit"] == 2
-            assert recover["next"] == [gate_name]
+            assert recover["next"] == [
+                "CooperativeSpeedSettingsGate" if filename == "cooperative_live.json" else gate_name
+            ]
 
 
 def test_process_conflict_focus_text_does_not_expose_program_identity():
@@ -1090,7 +1100,7 @@ def test_formal_realtime_song_timeout_allows_long_music():
         formal_nodes = [
             node
             for node in nodes.values()
-            if node.get("custom_action") == "RealtimeProfilePlay"
+            if node.get("custom_action") in {"RealtimeProfilePlay", "ChallengeProfilePlay"}
             and node.get("custom_action_param", {}).get("require_completion")
         ]
         assert formal_nodes

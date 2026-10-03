@@ -543,6 +543,7 @@ class RecordingTests(unittest.TestCase):
         for path in FRAMES.glob('frame-*.png'):
             self.assertIsNone(self.recognizer.box(imread_unicode(path),'activity_reward'),path.name)
 
+    @unittest.skipUnless(FRAMES.is_dir(), '需要本地团队录像帧，公开仓库不包含原始录像')
     def test_all_117_frames_have_no_input_during_track_or_home(self):
         files=sorted(FRAMES.glob('frame-*.png'))
         self.assertEqual(len(files),117)

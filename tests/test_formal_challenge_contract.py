@@ -150,10 +150,9 @@ def test_calibration_rounds_bypass_the_shared_multi_live_hit_counter():
 def test_challenge_points_and_profile_contract():
     interface = load("interface.json")
     nodes = load("resource/pipeline/challenge_live.json")
-    points = interface["option"]["ChallengePoints"]["cases"]
-    assert {int(case["name"]): case["pipeline_override"]["ChallengePointSelect"]["target"] for case in points} == {
-        200: [875, 212], 400: [875, 286], 800: [875, 359], 1600: [875, 431]
-    }
+    assert "ChallengePoints" not in interface["option"]
+    assert nodes["ChallengePointSelect"]["custom_action"] == "ChallengePointsSelect"
+    assert "target" not in nodes["ChallengePointSelect"]
     assert nodes["ChallengeProfileCheck"]["custom_action"] == "RealtimeProfileCheck"
     assert nodes["ChallengeProfileCheck"]["custom_action_param"]["run_mode"] == (
         "challenge"

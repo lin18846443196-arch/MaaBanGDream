@@ -73,7 +73,7 @@ class ChartIdentityTests(unittest.TestCase):
         self.assertEqual(result.selection.bestdori_song_id, 786)
 
     def test_original_song_and_three_successful_songs_stay_unchanged(self):
-        for song_id in (24, 10005, 514, 177, 712):
+        for song_id in (24, 514, 177, 712):
             song = next(s for s in self.repo._load_manifest()["songs"]
                         if s["bestdori_song_id"] == song_id)
             entry = song["difficulties"]["expert"]

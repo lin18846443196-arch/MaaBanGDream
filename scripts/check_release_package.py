@@ -10,15 +10,18 @@ from pathlib import Path
 
 
 REQUIRED_PATHS = (
-    "MFAAvalonia.exe",
-    "MFAAvalonia.deps.json",
+    "RhythmPilot.exe",
+    "RhythmPilot.dll",
+    "RhythmPilot.deps.json",
+    "RhythmPilot.runtimeconfig.json",
     "MFAUpdater.exe",
     "libs/MFAAvalonia.Core.dll",
     "interface.json",
     "interface.template.json",
     "docs/about.md",
     "docs/contact.md",
-    "docs/assets/maabangdream-logo-v1.png",
+    "docs/announcement.md",
+    "docs/assets/rhythmpilot-logo.png",
     "agent/server.py",
     "agent/profile_manager.py",
     "agent/realtime/native/maabangdream_realtime.pyd",
@@ -26,9 +29,12 @@ REQUIRED_PATHS = (
     "resource/Release.md",
     "resource/charts/manifest.json",
     "scripts/start-release.ps1",
+    "scripts/cleanup_runtime_artifacts.py",
+    "scripts/restart-release.ps1",
+    "scripts/normalize-release-directory.ps1",
     "scripts/sync_bestdori_catalog.py",
     "runtime/maabangdream-python.zip",
-    "启动 MaaBanGDream.cmd",
+    "启动 RhythmPilot.cmd",
     "BUILD-INFO.json",
     "LICENSE-MaaBanGDream.txt",
     "LICENSE-MFAAvalonia.txt",
@@ -38,6 +44,14 @@ REQUIRED_PATHS = (
     "THIRD-PARTY-NOTICES.md",
 )
 FORBIDDEN_TOP_LEVEL = (
+    "MaaBanGDream.exe",
+    "MaaBanGDream.dll",
+    "MaaBanGDream.deps.json",
+    "MaaBanGDream.runtimeconfig.json",
+    "MFAAvalonia.exe",
+    "MFAAvalonia.dll",
+    "MFAAvalonia.deps.json",
+    "MFAAvalonia.runtimeconfig.json",
     "config",
     "logs",
     "debug",
@@ -51,6 +65,8 @@ FORBIDDEN_TEXT = (
     r"D:\Documents\workplace",
     r"C:\Users\Lenovo",
     "MFAAvalonia-profile-v3",
+    r"C:\Users\SuperButton",
+    r"D:\Game\GameTools",
 )
 
 
@@ -68,7 +84,7 @@ def validate_release_archives(package_root: Path) -> list[str]:
                 names = set(archive.namelist())
                 is_update = archive_path.name.endswith("-update.zip")
                 archive_root = "" if is_update else f"{package_root.name}/"
-                launcher = f"{archive_root}启动 MaaBanGDream.cmd"
+                launcher = f"{archive_root}启动 RhythmPilot.cmd"
                 if launcher not in names:
                     errors.append(
                         f"release archive has a corrupted or missing launcher name: "
@@ -111,6 +127,8 @@ def validate(package_root: Path) -> list[str]:
     interface_path = package_root / "interface.json"
     if interface_path.is_file():
         interface = json.loads(interface_path.read_text(encoding="utf-8-sig"))
+        if interface.get("name") != "RhythmPilot" or interface.get("github") != "https://github.com/lin18846443196-arch/MaaBanGDream":
+            errors.append("release identity or update repository is not RhythmPilot")
         if interface["agent"]["child_exec"] != "python":
             errors.append("unconfigured interface must use portable child_exec=python")
         if interface["resource"][0]["path"] != ["./resource"]:

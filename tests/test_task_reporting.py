@@ -406,7 +406,7 @@ print('real-loop-ok')
     result = subprocess.run(
         [sys.executable, "-c", code],
         input=json.dumps({"root": str(tmp_path), "total": total}),
-        text=True, capture_output=True, timeout=30,
+        text=True, encoding="utf-8", errors="replace", capture_output=True, timeout=30,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "real-loop-ok" in result.stdout

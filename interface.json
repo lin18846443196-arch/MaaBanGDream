@@ -1,15 +1,15 @@
 {
   "$schema": "https://raw.githubusercontent.com/MaaXYZ/MaaFramework/main/tools/interface.schema.json",
   "interface_version": 2,
-  "name": "MaaBanGDream",
-  "label": "BanG Dream! 自动化（MaaFramework）",
-  "version": "1.4.5",
+  "name": "RhythmPilot",
+  "label": "RhythmPilot · BanG Dream! 自动化",
+  "version": "1.5.0",
   "description": "docs/about.md",
-  "about_icon": "docs/assets/maabangdream-logo-v1.png",
+  "about_icon": "docs/assets/rhythmpilot-logo.png",
   "contact": "docs/contact.md",
-  "welcome": "https://raw.githubusercontent.com/coatcn1/MaaBanGDream/main/docs/announcement.md",
+  "welcome": "https://raw.githubusercontent.com/lin18846443196-arch/MaaBanGDream/main/docs/announcement.md",
   "license": "PolyForm-Noncommercial-1.0.0",
-  "github": "https://github.com/coatcn1/MaaBanGDream",
+  "github": "https://github.com/lin18846443196-arch/MaaBanGDream",
   "controller": [
     {
       "name": "Android",
@@ -691,7 +691,9 @@
           "label": "不指定歌曲",
           "pipeline_override": {
             "CooperativeSongChoiceConfigure": {
-              "custom_action_param": {"song_choice": "unspecified"}
+              "custom_action_param": {
+                "song_choice": "unspecified"
+              }
             }
           }
         },
@@ -700,7 +702,9 @@
           "label": "随机选曲（第一轮留 10 秒筛歌）",
           "pipeline_override": {
             "CooperativeSongChoiceConfigure": {
-              "custom_action_param": {"song_choice": "random"}
+              "custom_action_param": {
+                "song_choice": "random"
+              }
             }
           }
         },
@@ -709,7 +713,9 @@
           "label": "当前曲目（第一轮留 10 秒筛歌）",
           "pipeline_override": {
             "CooperativeSongChoiceConfigure": {
-              "custom_action_param": {"song_choice": "current"}
+              "custom_action_param": {
+                "song_choice": "current"
+              }
             }
           }
         }
@@ -1931,13 +1937,33 @@
                 "max_attempts": 3,
                 "page_guard": "ChallengeSongMarker",
                 "refresh_node": "CommonRefreshScreen",
-                "song_title_roi": [200, 327, 368, 38],
+                "song_title_roi": [
+                  200,
+                  327,
+                  368,
+                  38
+                ],
                 "difficulty_targets": {
-                  "Easy": [709, 545],
-                  "Normal": [822, 545],
-                  "Hard": [934, 545],
-                  "Expert": [1048, 545],
-                  "Special": [1180, 545]
+                  "Easy": [
+                    709,
+                    545
+                  ],
+                  "Normal": [
+                    822,
+                    545
+                  ],
+                  "Hard": [
+                    934,
+                    545
+                  ],
+                  "Expert": [
+                    1048,
+                    545
+                  ],
+                  "Special": [
+                    1180,
+                    545
+                  ]
                 },
                 "mode": "challenge"
               }
@@ -1992,13 +2018,33 @@
                 "max_attempts": 3,
                 "page_guard": "ChallengeSongMarker",
                 "refresh_node": "CommonRefreshScreen",
-                "song_title_roi": [200, 327, 368, 38],
+                "song_title_roi": [
+                  200,
+                  327,
+                  368,
+                  38
+                ],
                 "difficulty_targets": {
-                  "Easy": [709, 545],
-                  "Normal": [822, 545],
-                  "Hard": [934, 545],
-                  "Expert": [1048, 545],
-                  "Special": [1180, 545]
+                  "Easy": [
+                    709,
+                    545
+                  ],
+                  "Normal": [
+                    822,
+                    545
+                  ],
+                  "Hard": [
+                    934,
+                    545
+                  ],
+                  "Expert": [
+                    1048,
+                    545
+                  ],
+                  "Special": [
+                    1180,
+                    545
+                  ]
                 },
                 "mode": "challenge"
               }
@@ -2053,13 +2099,33 @@
                 "max_attempts": 3,
                 "page_guard": "ChallengeSongMarker",
                 "refresh_node": "CommonRefreshScreen",
-                "song_title_roi": [200, 327, 368, 38],
+                "song_title_roi": [
+                  200,
+                  327,
+                  368,
+                  38
+                ],
                 "difficulty_targets": {
-                  "Easy": [709, 545],
-                  "Normal": [822, 545],
-                  "Hard": [934, 545],
-                  "Expert": [1048, 545],
-                  "Special": [1180, 545]
+                  "Easy": [
+                    709,
+                    545
+                  ],
+                  "Normal": [
+                    822,
+                    545
+                  ],
+                  "Hard": [
+                    934,
+                    545
+                  ],
+                  "Expert": [
+                    1048,
+                    545
+                  ],
+                  "Special": [
+                    1180,
+                    545
+                  ]
                 },
                 "mode": "challenge"
               }
@@ -2114,13 +2180,33 @@
                 "max_attempts": 3,
                 "page_guard": "ChallengeSongMarker",
                 "refresh_node": "CommonRefreshScreen",
-                "song_title_roi": [200, 327, 368, 38],
+                "song_title_roi": [
+                  200,
+                  327,
+                  368,
+                  38
+                ],
                 "difficulty_targets": {
-                  "Easy": [709, 545],
-                  "Normal": [822, 545],
-                  "Hard": [934, 545],
-                  "Expert": [1048, 545],
-                  "Special": [1180, 545]
+                  "Easy": [
+                    709,
+                    545
+                  ],
+                  "Normal": [
+                    822,
+                    545
+                  ],
+                  "Hard": [
+                    934,
+                    545
+                  ],
+                  "Expert": [
+                    1048,
+                    545
+                  ],
+                  "Special": [
+                    1180,
+                    545
+                  ]
                 },
                 "mode": "challenge"
               }
@@ -2175,13 +2261,33 @@
                 "max_attempts": 3,
                 "page_guard": "ChallengeSongMarker",
                 "refresh_node": "CommonRefreshScreen",
-                "song_title_roi": [200, 327, 368, 38],
+                "song_title_roi": [
+                  200,
+                  327,
+                  368,
+                  38
+                ],
                 "difficulty_targets": {
-                  "Easy": [709, 545],
-                  "Normal": [822, 545],
-                  "Hard": [934, 545],
-                  "Expert": [1048, 545],
-                  "Special": [1180, 545]
+                  "Easy": [
+                    709,
+                    545
+                  ],
+                  "Normal": [
+                    822,
+                    545
+                  ],
+                  "Hard": [
+                    934,
+                    545
+                  ],
+                  "Expert": [
+                    1048,
+                    545
+                  ],
+                  "Special": [
+                    1180,
+                    545
+                  ]
                 },
                 "mode": "challenge",
                 "fallback_difficulties": [
@@ -2476,5 +2582,6 @@
         }
       ]
     }
-  }
+  },
+  "icon": "docs/assets/rhythmpilot-logo.png"
 }

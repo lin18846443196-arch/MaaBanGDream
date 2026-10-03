@@ -1,10 +1,18 @@
+﻿param(
+    [string]$Python,
+    [string]$MfaRoot,
+    [switch]$Portable
+)
+
 $ErrorActionPreference = 'Stop'
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $workspaceRoot = Split-Path -Parent $projectRoot
 $condaRoot = Join-Path $workspaceRoot '.tools\Miniconda3'
 $environmentName = 'maabangdream'
-$python = Join-Path $condaRoot "envs\$environmentName\python.exe"
+if (-not $Python) {
+    $Python = Join-Path $condaRoot "envs\$environmentName\python.exe"
+}
 
 if (-not (Test-Path -LiteralPath $python)) {
     throw "Conda environment '$environmentName' missing. Run scripts/setup.ps1 first."
@@ -13,7 +21,10 @@ if (-not (Test-Path -LiteralPath $python)) {
 & $python -m compileall -q (Join-Path $projectRoot 'agent') (Join-Path $projectRoot 'scripts')
 if ($LASTEXITCODE -ne 0) { throw 'Python compilation failed.' }
 
-& $python (Join-Path $projectRoot 'scripts\check_runtime.py')
+$runtimeArguments = @()
+if ($Portable) { $runtimeArguments += '--portable' }
+if ($MfaRoot) { $runtimeArguments += @('--mfa-root', $MfaRoot) }
+& $python (Join-Path $projectRoot 'scripts\check_runtime.py') @runtimeArguments
 if ($LASTEXITCODE -ne 0) { throw 'Runtime compatibility check failed.' }
 
 $testTemp = Join-Path $projectRoot ".local\pytest-$PID"

@@ -807,7 +807,9 @@ def test_cooperative_photogate_ignores_prepare_popup_transitions():
         grace_ms=500.0,
         latency_ms=30.0,
         mode="cooperative-playfield-confirmed",
+        popup_detector=CooperativePreparePopupDetector(),
     )
+    gate._has_approaching_note_head = lambda image: True
     playfield = _synthetic_playfield()
     popup = _synthetic_prepare_popup()
 
@@ -856,7 +858,9 @@ def test_popup_like_first_note_triggers_after_stable_baseline():
         grace_ms=0.0,
         latency_ms=30.0,
         mode="cooperative-playfield-confirmed",
+        popup_detector=CooperativePreparePopupDetector(),
     )
+    gate._has_approaching_note_head = lambda image: True
     playfield = _synthetic_playfield()
     popup = _synthetic_prepare_popup()
 
@@ -882,7 +886,9 @@ def test_popup_like_first_note_triggers_when_popup_never_appears():
         stable_duration_ms=100.0,
         grace_ms=0.0,
         mode="cooperative-playfield-confirmed",
+        popup_detector=CooperativePreparePopupDetector(),
     )
+    gate._has_approaching_note_head = lambda image: True
     playfield = _synthetic_playfield()
     first_note = _synthetic_popup_like_double_flick()
 
@@ -902,7 +908,9 @@ def test_one_frame_popup_flash_finishes_before_first_note():
         stable_duration_ms=100.0,
         grace_ms=0.0,
         mode="cooperative-playfield-confirmed",
+        popup_detector=CooperativePreparePopupDetector(),
     )
+    gate._has_approaching_note_head = lambda image: True
     playfield = _synthetic_playfield()
     popup = _synthetic_prepare_popup()
     first_note = _synthetic_popup_like_double_flick()
@@ -931,7 +939,9 @@ def test_cooperative_photogate_blocks_broad_prepare_dim():
         grace_ms=0.0,
         latency_ms=30.0,
         mode="cooperative-playfield-confirmed",
+        popup_detector=CooperativePreparePopupDetector(),
     )
+    gate._has_approaching_note_head = lambda image: True
     playfield = _synthetic_playfield()
 
     assert gate.observe(playfield, 0.00) is None
@@ -944,7 +954,8 @@ def test_cooperative_photogate_blocks_broad_prepare_dim():
     dimmed[510:536] = 60
     assert gate.observe(dimmed, 0.20) is None
     assert gate.triggered is False
-    assert gate.frozen is False
+    # 本地门禁更新颜色基线并保留已确认的开演状态，后续候选仍检查音符头。
+    assert gate.frozen is True
 
     # 重新建立基线后，窄列音符变化仍正常触发。
     assert gate.observe(dimmed, 0.31) is None
@@ -972,7 +983,9 @@ def test_cooperative_photogate_accepts_localized_directional_like_changes(
         grace_ms=0.0,
         latency_ms=30.0,
         mode="cooperative-playfield-confirmed",
+        popup_detector=CooperativePreparePopupDetector(),
     )
+    gate._has_approaching_note_head = lambda image: True
     playfield = _synthetic_playfield()
 
     assert gate.observe(playfield, 0.00) is None
@@ -1001,6 +1014,7 @@ def test_legacy_lifecycle_waits_for_popup_and_first_note_before_completion():
         mode="cooperative-playfield-confirmed",
         popup_detector=lambda _: popup[0],
     )
+    gate._has_approaching_note_head = lambda image: True
     monitor = PlayfieldLifecycleMonitor(
         start_gate=gate, missing_checks=2, active_check_interval_seconds=0,
     )
@@ -1731,6 +1745,9 @@ def test_native_report_rejects_absolute_drift_when_clock_uncertainty_exceeds_1ms
     backend._playback_observation_started = True
     backend._clock_basis = "probe-midpoint"
     backend._clock_uncertainty_ms = 1.001
+    backend._photogate = NativeStartPhotogate()
+    # 本测试只覆盖时钟误差报告，开演诊断在独立回放测试中验证。
+    backend.start_gate_diagnostics = lambda: {}
     backend._run_id = "uncertainty-regression"
     backend._first_action_anchor_s = 1.0
     backend._jlog_path = None
