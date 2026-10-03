@@ -198,7 +198,7 @@ Expert / Special 建议使用 **5.0 或更高流速**，并按实际流速校准
 
 ## 验证状态与已知限制
 
-2.0.1 提供完整包、更新包、定制 MFA 源码包及 Expert 默认校准 ZIP，各附 SHA256；自动化、构建和发布记录见 [验证状态](docs/validation-v2.0.1.md)。Windows PowerShell 5.1 下中文、空格和深目录的便携运行时首次准备已有检查覆盖。
+2.0.1 已正式发布为 Latest，提供完整包、更新包、定制 MFA 源码包及 Expert 默认校准 ZIP，各附 SHA256；八个附件的远端摘要与本地一致。本地完整自动化为 **1927 passed / 12 skipped**，纯公开源码为 **1708 passed / 231 skipped**。Windows PowerShell 5.1 下中文、空格路径首次及重复准备通过检查，补齐 Native 校准时已有 Profile 和选择保持不变。详细记录见 [验证状态](docs/validation-v2.0.1.md)。
 
 **MuMu Native Expert 协力已完成五局验收。** 输入全部执行、触点释放正常，准备页误判没有复发；一次成员退出正常重入。前四首判定全部为 PERFECT，第五首数字未读出；第 1、5 首设备时序诊断超阈值，第 4 首记录 SLOW 182，录像有帧缺口。不承诺全连或零失误。挑战、团队、组曲和 Special 边界未新增完整实测。
 
