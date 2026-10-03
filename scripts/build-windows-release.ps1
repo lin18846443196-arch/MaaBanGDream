@@ -76,6 +76,7 @@ foreach ($required in @(
     (Join-Path $projectRoot 'scripts\start-release.ps1'),
     (Join-Path $projectRoot 'scripts\normalize-release-directory.ps1'),
     (Join-Path $projectRoot 'scripts\restart-release.ps1'),
+    (Join-Path $projectRoot 'scripts\create_mfa_source_archive.py'),
     $zipBuilder
 )) {
     if (-not (Test-Path -LiteralPath $required)) {
@@ -348,6 +349,7 @@ $buildInfo = [ordered]@{
     mfa_repository = 'https://github.com/coatcn1/MFAAvalonia'
     mfa_branch = $mfaBranch
     mfa_commit = $mfaCommit
+    mfa_source_asset = "RhythmPilot-v$Version-MFA-source.zip"
     mfaavalonia = '2.12.0-custom'
     maafw = '5.10.2'
     python = '3.12'
@@ -365,6 +367,12 @@ $buildInfo | ConvertTo-Json -Depth 5 |
     Set-Content `
         -LiteralPath (Join-Path $packageRoot 'BUILD-INFO.json') `
         -Encoding utf8
+
+if (-not $AllowDirty) {
+    & $BuildPython (Join-Path $PSScriptRoot 'create_mfa_source_archive.py') `
+        --package-root $packageRoot --project-root $projectRoot --mfa-root $MfaSourceRoot
+    if ($LASTEXITCODE -ne 0) { throw 'Desktop corresponding source archive creation failed.' }
+}
 
 $forbiddenTopLevelNames = @(
     'config',
@@ -458,4 +466,5 @@ $updateZipHash = (Get-FileHash -LiteralPath $updateZipPath -Algorithm SHA256).Ha
     UpdateZip = $updateZipPath
     UpdateSha256 = $updateZipHash
     UpdateBytes = (Get-Item -LiteralPath $updateZipPath).Length
+    MfaSourceZip = $(if (-not $AllowDirty) { Join-Path $outputFull "RhythmPilot-v$Version-MFA-source.zip" })
 }

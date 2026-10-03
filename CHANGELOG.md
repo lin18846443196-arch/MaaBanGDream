@@ -7,6 +7,7 @@
 - 启动清理超过 24 小时的自动输出，保留手动录像、配置、Profile、未完成校准证据与近期完整记录；支持新旧宿主进程保护。
 - 使用 RhythmPilot 名称与原创图标，更新源改为 woshiyigeanniu/YesBanGDream；重新构建桌面宿主和独立更新器，保留原许可证与第三方声明。
 - 修复便携 Python 在中文深目录超过 MAX_PATH 时的首次准备失败；不改系统策略，保留普通环境前缀。
+- Release 同时附完整定制 MFA 源码与品牌重建输入，并校验源码提交和摘要与二进制构建记录一致。
 - 迁移风险、分阶段提交和发布/回退流程见 docs/upstream-migration-v1.5.0.md 与 docs/release-rhythmpilot.md。
 - 此分支的自动化和构建结果独立记录于 docs/validation-v1.5.0.md，真实游戏验收和 GitHub 发布尚未完成。以下历史条目属于上游或原基线记录。
 

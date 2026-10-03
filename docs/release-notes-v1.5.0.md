@@ -25,6 +25,7 @@
 首次使用请下载完整包并解压到新目录，双击 `启动 RhythmPilot.cmd`。
 更新包仅供已安装 RhythmPilot 的便携环境使用，保留配置与 Profile，谱面独立同步。
 完整包与更新包各附 SHA256；固定 Python 3.12、MaaFw 5.10.2、定制 MFA 2.12.0。
+同一 Release 附定制 MFA 完整源码 ZIP、品牌构建输入和对应摘要。
 
 ## 验证与限制
 
