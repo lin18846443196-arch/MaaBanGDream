@@ -1,12 +1,57 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
 from agent.profile_manager import handle_request
 from agent.realtime.profile_store import RealtimeProfileStore
 from tests.test_realtime_profile import SIGNATURE, payload
+
+
+@pytest.mark.parametrize("encoding", ["utf-8", "cp936", "ascii"])
+@pytest.mark.parametrize("ok", [True, False])
+def test_cli_json_transport_preserves_chinese_without_locale_dependency(encoding, ok):
+    value = {
+        "profiles": [{}, {"formal_result": {
+            "terminal_reason": "用户已停止任务",
+            "profile_path": "演出校准.json",
+        }}],
+    }
+    program = "from agent import profile_manager\n"
+    if ok:
+        program += f"profile_manager.handle_request = lambda request: {value!r}\n"
+    else:
+        program += (
+            "def reject(request):\n"
+            "    raise ValueError('无法读取演出校准：用户已停止任务')\n"
+            "profile_manager.handle_request = reject\n"
+        )
+    program += "raise SystemExit(profile_manager.main())\n"
+    environment = os.environ.copy()
+    environment["PYTHONIOENCODING"] = encoding
+    result = subprocess.run(
+        [sys.executable, "-c", program],
+        input=b'{"operation":"list","difficulty":"Expert"}',
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=Path(__file__).resolve().parents[1],
+        env=environment,
+        timeout=10,
+    )
+
+    assert result.returncode == (0 if ok else 1), result.stderr
+    assert result.stdout.isascii(), "JSON 通信不得依赖父进程默认的文字编码"
+    response = json.loads(result.stdout.decode("ascii"))
+    assert response["ok"] is ok
+    if ok:
+        assert response["result"] == value
+    else:
+        assert response["error"] == "无法读取演出校准：用户已停止任务"
 
 
 def test_list_reports_automatic_selection_and_full_records(tmp_path):

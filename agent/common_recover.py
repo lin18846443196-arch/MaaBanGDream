@@ -15,15 +15,13 @@ from maa.context import Context
 from maa.custom_action import CustomAction
 
 try:
-    from .capture_transition import wait_for_game_capture_ready
-    from .foreground_guard import ForegroundAppMismatch, foreground_package, require_game_foreground, mumu_extras_active
+    from .foreground_guard import ForegroundAppMismatch, foreground_package, require_game_foreground
     from .screen_refresh import ScreenRefreshCancelled, capture_image
     from .task_reporting import log_task, record_failure_reason
     from .maa_shell_compat import shell_output
     from .realtime.vision_io import imwrite_unicode
 except ImportError:  # AgentServer loads this module from the agent directory.
-    from capture_transition import wait_for_game_capture_ready
-    from foreground_guard import ForegroundAppMismatch, foreground_package, require_game_foreground, mumu_extras_active
+    from foreground_guard import ForegroundAppMismatch, foreground_package, require_game_foreground
     from screen_refresh import ScreenRefreshCancelled, capture_image
     from task_reporting import log_task, record_failure_reason
     from maa_shell_compat import shell_output
@@ -152,11 +150,6 @@ def _prepare_game(
         return True, True
 
     if actual == package:
-        if mumu_extras_active(controller):
-            # The renderer selects an app panel only after StartApp sets its
-            # package hint; global desktop focus can stay on another display.
-            controller.post_start_app(package).wait()
-            return True, True
         log_task(
             "游戏启动",
             "进程",
@@ -351,9 +344,6 @@ class CommonRecover(CustomAction):
             if context.tasker.stopping:
                 return True
             return False
-
-        if app_started:
-            wait_for_game_capture_ready(context, package)
 
         emulator_rebooted = False
         restart = 0
@@ -926,7 +916,6 @@ class CommonRecover(CustomAction):
                 if context.tasker.stopping:
                     return True
                 controller.post_start_app(package).wait()
-                wait_for_game_capture_ready(context, package)
                 app_started = True
                 log_task(
                     "游戏启动",
@@ -960,7 +949,6 @@ class CommonRecover(CustomAction):
                     app_started = True
                     controller = context.tasker.controller
                     controller.post_start_app(package).wait()
-                    wait_for_game_capture_ready(context, package)
                     if not _wait_unless_stopping(context, restart_wait):
                         return True
                 else:

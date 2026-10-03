@@ -14,7 +14,6 @@ sys.path.insert(0, str(ROOT / "agent"))
 from maa.controller import AdbController
 from maa.library import Library
 from maa.tasker import Tasker
-from capture_transition import wait_for_game_capture_ready
 from foreground_guard import GAME_PACKAGE, foreground_package
 from realtime.cooperative_network import GameNetworkGate
 from realtime.vision_io import imwrite_unicode
@@ -47,7 +46,6 @@ def main():
             assert controller.post_click_key(3).wait().succeeded
             time.sleep(.6)
         assert controller.post_start_app(GAME_PACKAGE).wait().succeeded
-        wait_for_game_capture_ready(context)
         assert foreground_package(controller) == GAME_PACKAGE
         time.sleep(.5)
         for _ in range(20):

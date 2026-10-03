@@ -125,6 +125,11 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $profiles = Join-Path $packageRoot 'profiles'
+$profileDefaults = Join-Path $packageRoot 'agent\profile_defaults.py'
+if (Test-Path -LiteralPath $profileDefaults -PathType Leaf) {
+    & $python $profileDefaults --root $packageRoot
+    if ($LASTEXITCODE -ne 0) { throw 'Default Profile import failed; existing profiles were preserved.' }
+}
 $recordings = Join-Path $packageRoot 'debug\recordings'
 $captures = Join-Path $packageRoot 'screencap'
 $maafwDebug = Join-Path $packageRoot 'debug\maafw'

@@ -1,8 +1,6 @@
 {
   "version": 1,
-  "pinned": {
-    "Expert": "expert-20260905233716.json"
-  },
+  "pinned": {},
   "runtime_options": {
     "skip_process_conflict_cleanup": false,
     "note_speed_settings_enabled": false,
