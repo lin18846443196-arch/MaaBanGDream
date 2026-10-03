@@ -25,7 +25,8 @@
   Python/MaaFw/Core/MFA/Binding 版本检查通过；全程使用独立候选目录。
 - 开发部署：原用户安装未被覆盖。
 - 真实设备/游戏：迁移后的版本尚未验收。
-- 发布：用户已指定仓库与名称，GitHub 授权延后，尚未推送或创建 Release。
+- 发布：2026-10-03 已向个人仓库推送源码，经 [PR #1](https://github.com/woshiyigeanniu/YesBanGDream/pull/1) 合并到 main，并发布 [YesBanGDream v2.0.0](https://github.com/woshiyigeanniu/YesBanGDream/releases/tag/v2.0.0)。附件为完整包、更新包及 MFA 源码包；GitHub Release 为公开发布，未标记预发布。
+  包内记录的项目构建提交为 `f76c5db`，main 的合并提交为 `5247801`；发布状态不代表真实游戏验收通过。
 
 原始录像、设备信息、个人配置和历史诊断保留在本地且被 Git 忽略。
 公开源码测试需要这些原始证据时明确跳过，裁剪后的功能模板随源码保留。
@@ -34,4 +35,4 @@
 解压使用扩展 Windows 路径，并通过有目录边界的文件访问适配执行原修复脚本；
 写入环境的 prefix 仍为普通路径，不改系统长路径策略、不改原用户安装。
 
-本版本的稳定 Release 条件仍包括真实游戏验收及 GitHub 授权/源码留存。
+GitHub 授权、源码留存与发布已完成；本次迁移后的真实游戏验收仍未完成，不能用自动化测试或公开发布状态代替。
