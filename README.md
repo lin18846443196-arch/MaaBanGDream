@@ -22,6 +22,8 @@ YesBanGDream 是基于 [MaaBanGDream](https://github.com/coatcn1/MaaBanGDream) �
 
 2.0.1 更新双角色相框图标，修复协力准备页误判、直接启动时的 Profile 通信错误及 MuMu 前台额外切换；同时提供 Legacy / Native Expert 默认校准。最近一次 MuMu Native Expert 协力完成 5/5，具体结果与保留的问题见 [验证状态](docs/validation-v2.0.1.md)。
 
+仓库现已使用 `woshiyigeanniu/YesBanGDream`，客户端更新、公告与反馈均指向新地址。旧身份和提交邮箱已从维护分支、版本标签及发布附件中清理；GitHub 历史 PR 缓存另行申请清除。
+
 [下载 Releases](https://github.com/woshiyigeanniu/YesBanGDream/releases) · [问题反馈](https://github.com/woshiyigeanniu/YesBanGDream/issues) · [2.0.1 版本说明](docs/release-notes-v2.0.1.md)
 
 ## 功能总览

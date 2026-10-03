@@ -26,7 +26,7 @@
 - 开发部署：原用户安装未被覆盖。
 - 真实设备/游戏：迁移后的版本尚未验收。
 - 发布：2026-10-03 已向个人仓库推送源码，经 [PR #1](https://github.com/woshiyigeanniu/YesBanGDream/pull/1) 合并到 main，并发布 [YesBanGDream v2.0.0](https://github.com/woshiyigeanniu/YesBanGDream/releases/tag/v2.0.0)。附件为完整包、更新包及 MFA 源码包；GitHub Release 为公开发布，未标记预发布。
-  包内记录的项目构建提交为 `f76c5db`，main 的合并提交为 `5247801`；发布状态不代表真实游戏验收通过。
+  包内记录的项目构建提交为 `7896ad6`，main 的合并提交为 `8b33c53`；发布状态不代表真实游戏验收通过。
 
 原始录像、设备信息、个人配置和历史诊断保留在本地且被 Git 忽略。
 公开源码测试需要这些原始证据时明确跳过，裁剪后的功能模板随源码保留。

@@ -34,7 +34,7 @@
 - 从版本源码导出的纯公开目录：**1708 passed / 231 skipped**；跳过的项目需要未公开的原始设备证据或未随源码提交的构建产物。Native 校准导出精简后重新执行 Profile 和打包定向检查，**60 passed**。
 - 游戏流程修复已部署到本次五局使用的安装目录；2.0.1 新增的图标、默认校准导入及打包流程由自动化和发布包检查验收，不外推为重新跑过全部游戏模式。
 - 定制桌面源码使用 `cb6de3c`（新相框图标），品牌补丁可反向校验；完整对应源码与构建输入随 Release 附件提供。
-- [PR #3](https://github.com/woshiyigeanniu/YesBanGDream/pull/3) 已 squash 合并。二进制从干净 main `d3eefa5b31b13ab7996bb592dbcaa90a07762bb6` 构建，`v2.0.1` 标签与 `BUILD-INFO.json` 指向同一提交；桌面及更新器重新构建，未改动的 Python / Native 运行库复用经 SHA256 验证的上游 1.4.5 产物。
+- [PR #3](https://github.com/woshiyigeanniu/YesBanGDream/pull/3) 已 squash 合并。二进制从干净 main `4d61bdfffe14599d6066f1154198c67933759c5d` 构建，`v2.0.1` 标签与 `BUILD-INFO.json` 指向同一提交；桌面及更新器重新构建，未改动的 Python / Native 运行库复用经 SHA256 验证的上游 1.4.5 产物。
 - 发布目录 3439 个文件，完整包、更新包、MFA 对应源码包、Expert 校准包均通过 ZIP CRC 与 SHA256 检查。更新包根目录包含 `interface.json`，不含 Python 归档及谱面；两个二进制包的默认校准与独立附件一致。EXE 和更新器内嵌图标确认使用新相框图片。
 - Windows PowerShell 5.1：从完整包解压到中文、空格路径，首次运行 `start-release.ps1 -NoLaunch` 完成便携环境与配置准备；重复准备时补回缺失的 Native 文件，用户修改的 Legacy 校准及 `selection.json` 摘要不变。发布包 Profile 管理器的实际 JSON 响应可解析。此检查没有启动游戏任务，不替代发布包的再次实机连演。
 - [2.0.1 Release](https://github.com/woshiyigeanniu/YesBanGDream/releases/tag/v2.0.1) 于 2026-10-04 00:57:52（北京时间）正式发布，已确认非草稿、非预发布且为 Latest；八个附件上传完成，远端文件大小与 SHA256 摘要全部匹配本地。

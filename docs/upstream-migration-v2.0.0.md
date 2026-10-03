@@ -6,7 +6,7 @@ YesBanGDream 是基于 MaaBanGDream 的非官方版本，独立仓库为
 ## 基线与留存
 
 - 上游原基线：`v1.4.3`，`62f3cd1ddc4ec2733435205d91802f5ee08fdfa0`。
-- 本地定制快照：`personal-v1.4.3-snapshot`，`1708e4f`。
+- 本地定制快照：`personal-v1.4.3-snapshot`，`f3a5b7c`。
 - 同步目标：上游 `v1.4.5`，`6944c55ba7f71ada6403321d49e8197a1100df62`。
 - 上游发布包的构建提交为 `b45cb2efdc0f374899de41491dc1fb532f9e6a8e`，
   定制 MFA 源码提交为 `a39dcd87ba2e5098ee23072e9a015c5c36f8c8d1`。
