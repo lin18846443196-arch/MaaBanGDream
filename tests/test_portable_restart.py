@@ -16,7 +16,7 @@ pytestmark = pytest.mark.skipif(os.name != "nt", reason="Windows portable restar
 @pytest.mark.parametrize("fail", [False, True])
 def test_hidden_restart_renames_and_reports_preparation_result(tmp_path: Path, fail: bool):
     parent = tmp_path / "中文 空格 ' 便携"
-    install = parent / "RhythmPilot-v0.0.0-win-x64"
+    install = parent / "YesBanGDream-v0.0.0-win-x64"
     scripts = install / "scripts"
     scripts.mkdir(parents=True)
     (install / "update-manifest.json").write_text(
@@ -36,7 +36,7 @@ def test_hidden_restart_renames_and_reports_preparation_result(tmp_path: Path, f
         cwd=parent, capture_output=True, timeout=45,
         creationflags=subprocess.CREATE_NO_WINDOW,
     )
-    renamed = parent / "RhythmPilot-v7.8.9-win-x64"
+    renamed = parent / "YesBanGDream-v7.8.9-win-x64"
     assert renamed.is_dir() and not install.exists()
     assert result.returncode == (1 if fail else 0), result.stderr
     assert Path(json.loads(receipt.read_text(encoding="utf-8"))["install_root"]) == renamed

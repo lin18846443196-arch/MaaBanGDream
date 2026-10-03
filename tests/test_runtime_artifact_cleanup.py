@@ -232,7 +232,7 @@ class CleanupTests(PackageFixture):
 
     def test_branded_hosts_are_protected_during_migration(self):
         import psutil
-        for name in ("RhythmPilot.exe", "MaaBanGDream.exe"):
+        for name in ("YesBanGDream.exe", "MaaBanGDream.exe"):
             with self.subTest(name=name):
                 process = Mock(info={"name": name, "exe": str(self.root / name)})
                 with patch.object(psutil, "process_iter", return_value=[process]):
@@ -246,7 +246,7 @@ class LauncherTests(PackageFixture):
         if os.name != "nt":
             self.skipTest("Windows release launcher")
         self.powershell = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
-        self.file("RhythmPilot.exe", "dummy; never executed")
+        self.file("YesBanGDream.exe", "dummy; never executed")
         self.file("runtime/python/.maabangdream-ready", "ready")
         self.file("scripts/check_runtime.py", "# isolated compatibility stub")
         self.file("scripts/sync_bestdori_catalog.py", "# unused by launcher")

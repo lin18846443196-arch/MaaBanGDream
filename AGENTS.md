@@ -1,4 +1,4 @@
-# RhythmPilot Agent 指南
+# YesBanGDream Agent 指南
 
 本文件只记录会长期影响开发、诊断、部署和验收的规则。历史故障经过、已经完成的修改、
 一次性测试数字、提交号和发布结果写入 `CHANGELOG.md`、交接文档或调试证据，不再追加到
@@ -6,12 +6,12 @@
 
 ## 项目与目录边界
 
-RhythmPilot 是基于 MaaBanGDream 的非官方版本，通过定制 MFAAvalonia 加载 Python Agent，控制 Android
+YesBanGDream 是基于 MaaBanGDream 的非官方版本，通过定制 MFAAvalonia 加载 Python Agent，控制 Android
 设备完成自动演出、实时触控、校准、协力、挑战和组曲任务。
 
 | 路径 | 用途 | 写入规则 |
 | --- | --- | --- |
-| 当前 RhythmPilot Git checkout | 项目源码仓库 | 所有项目修改在此完成 |
+| 当前 YesBanGDream Git checkout | 项目源码仓库 | 所有项目修改在此完成 |
 | 隔离的开发 MFA 运行目录 | 开发运行环境 | 只由部署脚本同步，不提交 |
 | 独立的定制 MFAAvalonia checkout | 桌面源码仓库 | 独立分支、提交和验证 |
 | 用户正式安装目录 | 已发布客户端 | 默认只读；未经明确授权不得部署候选或修改配置 |
@@ -235,7 +235,7 @@ Realtime 闭环固定为：证据提取 → 必要的独立审查 → 最小实�
 ## 定制 MFAAvalonia 保护
 
 开发运行目录使用的 `MFAAvalonia.Core.dll` 来自独立定制 MFA checkout，
-以上游 `fix/speed-only-settings` 为基线应用 RhythmPilot 品牌补丁，不能用同版本官方
+以上游 `fix/speed-only-settings` 为基线应用 YesBanGDream 品牌补丁，不能用同版本官方
 DLL 覆盖。官方 DLL 会丢失“演出设置”、Profile 管理和 Mirror 更新源保护。
 
 - `scripts/patch-mfa-stop-status.ps1` 必须验证定制源码特征和基线祖先，替换前备份 DLL；定制
@@ -269,8 +269,8 @@ DLL 覆盖。官方 DLL 会丢失“演出设置”、Profile 管理和 Mirror �
 - v1.4.0 起项目自有代码使用 PolyForm Noncommercial 1.0.0；第三方许可证和品牌规则分别以
   `LICENSING-MaaBanGDream.md`、`THIRD-PARTY-NOTICES.md`、`TRADEMARKS-MaaBanGDream.md`
   为准。发布包必须携带相应正文，不能用根许可证覆盖第三方组件。
-- RhythmPilot 更新和 Release 指向 `woshiyigeanniu/YesBanGDream`；禁止向 upstream
-  推送或发布。构建/留存流程见 `docs/release-rhythmpilot.md`。MFA 品牌补丁独立提交，
+- YesBanGDream 更新和 Release 指向 `woshiyigeanniu/YesBanGDream`；禁止向 upstream
+  推送或发布。构建/留存流程见 `docs/release-yesbangdream.md`。MFA 品牌补丁独立提交，
   `BUILD-INFO.json` 明确源码提交、运行库来源与摘要。
 
 ## 当前仍需真机覆盖的范围

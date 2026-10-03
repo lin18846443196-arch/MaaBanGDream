@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="docs/assets/rhythmpilot-logo.png" alt="RhythmPilot Logo" width="260">
+  <img src="docs/assets/yesbangdream-logo.png" alt="YesBanGDream Logo" width="260">
 </p>
 
-<h1 align="center">RhythmPilot</h1>
+<h1 align="center">YesBanGDream</h1>
 
 <p align="center">
   <strong>BanG Dream! 自动化 · 实时演奏 · Bestdori 本地谱面辅助</strong>
@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/woshiyigeanniu/YesBanGDream/releases"><img src="https://img.shields.io/badge/Version-v1.5.0-ff6f9f" alt="Version"></a>
+  <a href="https://github.com/woshiyigeanniu/YesBanGDream/releases"><img src="https://img.shields.io/badge/Version-v2.0.0-ff6f9f" alt="Version"></a>
   <img src="https://img.shields.io/badge/MaaFramework-5.10.2-4c8bf5" alt="MaaFramework">
   <img src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?logo=windows11&logoColor=white" alt="Windows">
@@ -38,19 +38,19 @@
 
 ## 🚀 快速开始
 
-RhythmPilot 1.5.0 以本地定制 1.4.3 为基线，同步上游 1.4.5。支持挑战点数自动选择
+YesBanGDream 2.0.0 以本地定制 1.4.3 为基线，同步上游 1.4.5。支持挑战点数自动选择
 8/4/2/1 倍，并保留团队演出、难度/次数/跳车/诊断选项和启动清理。
 这是基于 MaaBanGDream 的非官方版本，由 woshiyigeanniu 独立维护。
 本次迁移后的真实游戏验收尚未完成，候选包先供预发布测试。
-详见 [迁移风险](docs/upstream-migration-v1.5.0.md)、[验证状态](docs/validation-v1.5.0.md)。
+详见 [迁移风险](docs/upstream-migration-v2.0.0.md)、[验证状态](docs/validation-v2.0.0.md)。
 
-程序入口为 `RhythmPilot.exe`。“设置 → 性能设置 → 任务运行时阻止息屏”开启后，仅在执行任务期间保持显示器和系统唤醒；任务完成、停止或失败后自动解除，关闭开关或退出程序也会解除。开关偏好保留，软件空闲时遵循系统的息屏和休眠设置；持续闲置的实际息屏行为仍待实测。
+程序入口为 `YesBanGDream.exe`。“设置 → 性能设置 → 任务运行时阻止息屏”开启后，仅在执行任务期间保持显示器和系统唤醒；任务完成、停止或失败后自动解除，关闭开关或退出程序也会解除。开关偏好保留，软件空闲时遵循系统的息屏和休眠设置；持续闲置的实际息屏行为仍待实测。
 
 ### 普通用户
 
-1. 前往 [Releases](https://github.com/woshiyigeanniu/YesBanGDream/releases) 下载最新的 `RhythmPilot-v*-win-x64.zip`
+1. 前往 [Releases](https://github.com/woshiyigeanniu/YesBanGDream/releases) 下载最新的 `YesBanGDream-v*-win-x64.zip`
 2. **完整解压**压缩包
-3. 双击 `启动 RhythmPilot.cmd`
+3. 双击 `启动 YesBanGDream.cmd`
 4. 在 MFA 中选择需要执行的任务
 
 > [!IMPORTANT]

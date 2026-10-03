@@ -225,7 +225,7 @@ def mfa_is_running(root: Path) -> bool:
     # denied access to its executable, retain its records instead of guessing.
     import psutil
 
-    host_names = {"mfaavalonia.exe", "maabangdream.exe", "rhythmpilot.exe"}
+    host_names = {"mfaavalonia.exe", "maabangdream.exe", "yesbangdream.exe"}
     for process in psutil.process_iter(["name", "exe"]):
         try:
             name = (process.info["name"] or "").casefold()
@@ -251,7 +251,7 @@ def main() -> int:
     try:
         root = args.root.resolve(strict=True)
         if args.skip_if_running and mfa_is_running(root):
-            print("Runtime artifact cleanup skipped: RhythmPilot is already running.")
+            print("Runtime artifact cleanup skipped: YesBanGDream is already running.")
             return 0
         result = clean_runtime_artifacts(root, dry_run=args.dry_run)
         if args.json:

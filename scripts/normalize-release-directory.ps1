@@ -21,8 +21,8 @@ if (-not $currentVersion) {
 }
 
 $folderName = Split-Path -Leaf $packageRoot
-$expectedFolder = "RhythmPilot-v$currentVersion-win-x64"
-if ($folderName -notmatch '^RhythmPilot-v.*-win-x64$' -or $folderName -eq $expectedFolder) {
+$expectedFolder = "YesBanGDream-v$currentVersion-win-x64"
+if ($folderName -notmatch '^YesBanGDream-v.*-win-x64$' -or $folderName -eq $expectedFolder) {
     if ($Inline) { return $packageRoot }
     exit 0
 }
@@ -49,7 +49,7 @@ $helperPath = Join-Path $env:TEMP "maabangdream-rename-$currentVersion.ps1"
 $rootLiteral = $packageRoot.Replace("'", "''")
 $newRootLiteral = $newRoot.Replace("'", "''")
 $parentLiteral = $parent.Replace("'", "''")
-$launcherName = (-join [char[]](0x542F, 0x52A8)) + ' RhythmPilot.cmd'
+$launcherName = (-join [char[]](0x542F, 0x52A8)) + ' YesBanGDream.cmd'
 $launcherLiteral = $launcherName.Replace("'", "''")
 $helper = @"
 param()

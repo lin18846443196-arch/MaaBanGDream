@@ -10,7 +10,7 @@ $runtimeArchive = Join-Path $runtimeDirectory 'maabangdream-python.zip'
 $pythonRoot = Join-Path $runtimeDirectory 'python'
 $python = Join-Path $pythonRoot 'python.exe'
 $runtimeReady = Join-Path $pythonRoot '.maabangdream-ready'
-$mfa = Join-Path $packageRoot 'RhythmPilot.exe'
+$mfa = Join-Path $packageRoot 'YesBanGDream.exe'
 $interfaceTemplate = Join-Path $packageRoot 'interface.template.json'
 $interfacePath = Join-Path $packageRoot 'interface.json'
 $profileManagerPath = Join-Path $packageRoot 'profile-manager.json'
@@ -47,7 +47,7 @@ if (
 ) {
     throw (
         'Bundled Python runtime is missing; ' +
-        'please re-download the full package (RhythmPilot-v*-win-x64.zip).'
+        'please re-download the full package (YesBanGDream-v*-win-x64.zip).'
     )
 }
 
@@ -64,7 +64,7 @@ if (
             [System.IO.Directory]::Delete($oldRoot, $true)
         }
     }
-    Write-Host 'Preparing bundled RhythmPilot Python runtime ...'
+    Write-Host 'Preparing bundled YesBanGDream Python runtime ...'
     # Expand-Archive/Move-Item 在深目录可能静默漏掉超过 MAX_PATH 的文件。
     # 使用 Windows 长路径前缀解压，并原子移动整个目录，不逐文件复制。
     Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -260,7 +260,7 @@ if ($OrderedStartupTrial) {
     $env:MAABANGDREAM_ORDERED_STARTUP = '1'
 }
 try {
-    # 浏览器下载的压缩包会给 RhythmPilot.exe 打上 Zone.Identifier
+    # 浏览器下载的压缩包会给 YesBanGDream.exe 打上 Zone.Identifier
     # 标记，ShellExecute 启动会弹 SmartScreen 并被取消；先解除该标记。
     Unblock-File -LiteralPath $mfa -ErrorAction SilentlyContinue
     Start-Process -FilePath $mfa -WorkingDirectory $packageRoot
@@ -270,5 +270,5 @@ finally {
     Remove-Item Env:MAABANGDREAM_MFA_ROOT -ErrorAction SilentlyContinue
     Remove-Item Env:MAABANGDREAM_ORDERED_STARTUP -ErrorAction SilentlyContinue
 }
-Write-Host "RhythmPilot started: $packageRoot"
+Write-Host "YesBanGDream started: $packageRoot"
 Write-Host "Ordered startup trial: $([bool]$OrderedStartupTrial)"

@@ -1,0 +1,20 @@
+<Project>
+  <!-- 仅覆盖桌面入口；核心库和更新器保留原程序集名称以保持兼容。 -->
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'MFAAvalonia.Desktop'">
+    <AssemblyName>YesBanGDream</AssemblyName>
+    <OutputName>YesBanGDream</OutputName>
+    <AssemblyTitle>YesBanGDream</AssemblyTitle>
+    <Product>YesBanGDream</Product>
+    <ApplicationIcon>$(MSBuildThisFileDirectory)yesbangdream.ico</ApplicationIcon>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'MFAUpdater'">
+    <Product>YesBanGDream</Product>
+    <ApplicationIcon>$(MSBuildThisFileDirectory)yesbangdream.ico</ApplicationIcon>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(MSBuildProjectName)' == 'MFAUpdater'">
+    <EmbeddedResource Remove="logo.ico" />
+    <EmbeddedResource Remove="..\MFAAvalonia\Assets\maabangdream-icon.png" />
+    <EmbeddedResource Include="$(MSBuildThisFileDirectory)yesbangdream.ico" LogicalName="MFAUpdater.logo.ico" />
+    <EmbeddedResource Include="$(MSBuildThisFileDirectory)..\docs\assets\yesbangdream-logo.png" LogicalName="MFAUpdater.brand.png" />
+  </ItemGroup>
+</Project>

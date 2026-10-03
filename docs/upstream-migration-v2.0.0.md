@@ -1,6 +1,6 @@
-# RhythmPilot 1.5.0 上游迁移评估
+# YesBanGDream 2.0.0 上游迁移评估
 
-RhythmPilot 是基于 MaaBanGDream 的非官方版本，独立仓库为
+YesBanGDream 是基于 MaaBanGDream 的非官方版本，独立仓库为
 <https://github.com/woshiyigeanniu/YesBanGDream>。
 
 ## 基线与留存
@@ -10,7 +10,7 @@ RhythmPilot 是基于 MaaBanGDream 的非官方版本，独立仓库为
 - 同步目标：上游 `v1.4.5`，`6944c55ba7f71ada6403321d49e8197a1100df62`。
 - 上游发布包的构建提交为 `b45cb2efdc0f374899de41491dc1fb532f9e6a8e`，
   定制 MFA 源码提交为 `a39dcd87ba2e5098ee23072e9a015c5c36f8c8d1`。
-- 开发分支：`feature/personal-v1.5.0`。迁移采用分组提交，便于单独审查与回退。
+- 开发分支：`feature/personal-v2.0.0`。迁移采用分组提交，便于单独审查与回退。
 
 上游 1.4.3→1.4.5 共 8 个提交、41 个变更文件。此数量只计算上游差异；
 本地快照另有 135 个变更或新增源码、测试、模板文件。原安装目录独立保留。
@@ -47,8 +47,8 @@ RhythmPilot 是基于 MaaBanGDream 的非官方版本，独立仓库为
 
 ## 发布与回退边界
 
-1. 完整包：`RhythmPilot-v1.5.0-win-x64.zip`，包含版本目录。
-2. 更新包：`RhythmPilot-v1.5.0-win-x64-update.zip`，归档根目录直接包含 `interface.json`，
+1. 完整包：`YesBanGDream-v2.0.0-win-x64.zip`，包含版本目录。
+2. 更新包：`YesBanGDream-v2.0.0-win-x64-update.zip`，归档根目录直接包含 `interface.json`，
    排除 Python 运行库归档和 `resource/charts`；分别附 SHA256。
 3. 许可证、第三方声明与原作者 Required Notice 随包保留；名称和图标独立。
 4. 首次使用自己的版本应解压到新目录，经过验收再迁入自己的配置/Profile；

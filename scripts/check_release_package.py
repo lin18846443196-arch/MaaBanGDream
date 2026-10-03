@@ -10,10 +10,10 @@ from pathlib import Path
 
 
 REQUIRED_PATHS = (
-    "RhythmPilot.exe",
-    "RhythmPilot.dll",
-    "RhythmPilot.deps.json",
-    "RhythmPilot.runtimeconfig.json",
+    "YesBanGDream.exe",
+    "YesBanGDream.dll",
+    "YesBanGDream.deps.json",
+    "YesBanGDream.runtimeconfig.json",
     "MFAUpdater.exe",
     "libs/MFAAvalonia.Core.dll",
     "interface.json",
@@ -21,7 +21,7 @@ REQUIRED_PATHS = (
     "docs/about.md",
     "docs/contact.md",
     "docs/announcement.md",
-    "docs/assets/rhythmpilot-logo.png",
+    "docs/assets/yesbangdream-logo.png",
     "agent/server.py",
     "agent/profile_manager.py",
     "agent/realtime/native/maabangdream_realtime.pyd",
@@ -35,7 +35,7 @@ REQUIRED_PATHS = (
     "scripts/normalize-release-directory.ps1",
     "scripts/sync_bestdori_catalog.py",
     "runtime/maabangdream-python.zip",
-    "启动 RhythmPilot.cmd",
+    "启动 YesBanGDream.cmd",
     "BUILD-INFO.json",
     "LICENSE-MaaBanGDream.txt",
     "LICENSE-MFAAvalonia.txt",
@@ -85,7 +85,7 @@ def validate_release_archives(package_root: Path) -> list[str]:
                 names = set(archive.namelist())
                 is_update = archive_path.name.endswith("-update.zip")
                 archive_root = "" if is_update else f"{package_root.name}/"
-                launcher = f"{archive_root}启动 RhythmPilot.cmd"
+                launcher = f"{archive_root}启动 YesBanGDream.cmd"
                 if launcher not in names:
                     errors.append(
                         f"release archive has a corrupted or missing launcher name: "
@@ -128,8 +128,8 @@ def validate(package_root: Path) -> list[str]:
     interface_path = package_root / "interface.json"
     if interface_path.is_file():
         interface = json.loads(interface_path.read_text(encoding="utf-8-sig"))
-        if interface.get("name") != "RhythmPilot" or interface.get("github") != "https://github.com/woshiyigeanniu/YesBanGDream":
-            errors.append("release identity or update repository is not RhythmPilot")
+        if interface.get("name") != "YesBanGDream" or interface.get("github") != "https://github.com/woshiyigeanniu/YesBanGDream":
+            errors.append("release identity or update repository is not YesBanGDream")
         if interface["agent"]["child_exec"] != "python":
             errors.append("unconfigured interface must use portable child_exec=python")
         if interface["resource"][0]["path"] != ["./resource"]:
