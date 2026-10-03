@@ -1,4 +1,4 @@
-# MaaBanGDream Agent 指南
+# RhythmPilot Agent 指南
 
 本文件只记录会长期影响开发、诊断、部署和验收的规则。历史故障经过、已经完成的修改、
 一次性测试数字、提交号和发布结果写入 `CHANGELOG.md`、交接文档或调试证据，不再追加到
@@ -6,14 +6,14 @@
 
 ## 项目与目录边界
 
-MaaBanGDream 基于 MaaFramework，通过定制 MFAAvalonia 加载 Python Agent，控制 Android
+RhythmPilot 是基于 MaaBanGDream 的非官方版本，通过定制 MFAAvalonia 加载 Python Agent，控制 Android
 设备完成自动演出、实时触控、校准、协力、挑战和组曲任务。
 
 | 路径 | 用途 | 写入规则 |
 | --- | --- | --- |
-| `D:\Documents\workplace\MaaBanGDream` | 唯一源码仓库 | 所有项目修改在这里完成 |
-| `D:\Documents\workplace\.tools\MFAAvalonia-profile-v3` | 开发 MFA 运行目录 | 只由部署脚本同步，不提交 |
-| `D:\Documents\workplace\MFAAvalonia` | 定制 MFAAvalonia 源码仓库 | 独立分支、提交和验证 |
+| 当前 RhythmPilot Git checkout | 项目源码仓库 | 所有项目修改在此完成 |
+| 隔离的开发 MFA 运行目录 | 开发运行环境 | 只由部署脚本同步，不提交 |
+| 独立的定制 MFAAvalonia checkout | 桌面源码仓库 | 独立分支、提交和验证 |
 | 用户正式安装目录 | 已发布客户端 | 默认只读；未经明确授权不得部署候选或修改配置 |
 
 MFA 不直接读取源码目录。修改 `agent/`、`resource/` 或 `interface.json` 后，必须通过
@@ -21,7 +21,7 @@ MFA 不直接读取源码目录。修改 `agent/`、`resource/` 或 `interface.j
 
 ## 固定运行环境
 
-- Python：`D:\Documents\workplace\.tools\Miniconda3\envs\maabangdream\python.exe`
+- Python：命名 Conda 环境 `maabangdream`，或经便携运行时检查的 `runtime/python/python.exe`
 - Python 版本：3.12；MaaFw：5.10.2；MFAAvalonia：2.12.0；.NET Runtime：10
 - Conda 仅使用 `conda-forge`，配置以 `runtime-compatibility.json` 为准。
 - 不使用仓库 `.venv`，不临时更换 Python、MaaFw 或 MFA 版本规避问题。
@@ -234,8 +234,8 @@ Realtime 闭环固定为：证据提取 → 必要的独立审查 → 最小实�
 
 ## 定制 MFAAvalonia 保护
 
-开发运行目录使用的 `MFAAvalonia.Core.dll` 来自
-`D:\Documents\workplace\MFAAvalonia` 的定制分支 `fix/speed-only-settings`，不能用同版本官方
+开发运行目录使用的 `MFAAvalonia.Core.dll` 来自独立定制 MFA checkout，
+以上游 `fix/speed-only-settings` 为基线应用 RhythmPilot 品牌补丁，不能用同版本官方
 DLL 覆盖。官方 DLL 会丢失“演出设置”、Profile 管理和 Mirror 更新源保护。
 
 - `scripts/patch-mfa-stop-status.ps1` 必须验证定制源码特征和基线祖先，替换前备份 DLL；定制
@@ -269,6 +269,9 @@ DLL 覆盖。官方 DLL 会丢失“演出设置”、Profile 管理和 Mirror �
 - v1.4.0 起项目自有代码使用 PolyForm Noncommercial 1.0.0；第三方许可证和品牌规则分别以
   `LICENSING-MaaBanGDream.md`、`THIRD-PARTY-NOTICES.md`、`TRADEMARKS-MaaBanGDream.md`
   为准。发布包必须携带相应正文，不能用根许可证覆盖第三方组件。
+- RhythmPilot 更新和 Release 指向 `woshiyigeanniu/YesBanGDream`；禁止向 upstream
+  推送或发布。构建/留存流程见 `docs/release-rhythmpilot.md`。MFA 品牌补丁独立提交，
+  `BUILD-INFO.json` 明确源码提交、运行库来源与摘要。
 
 ## 当前仍需真机覆盖的范围
 
@@ -283,12 +286,11 @@ DLL 覆盖。官方 DLL 会丢失“演出设置”、Profile 管理和 Mirror �
 # 完整验证
 .\scripts\verify.ps1
 
-# 固定运行时检查
-D:\Documents\workplace\.tools\Miniconda3\envs\maabangdream\python.exe scripts\check_runtime.py `
-  --mfa-root D:\Documents\workplace\.tools\MFAAvalonia-profile-v3
+# 固定便携运行时检查（路径由当前环境提供）
+& $python scripts\check_runtime.py --portable --mfa-root $developmentRoot
 
 # pytest
-D:\Documents\workplace\.tools\Miniconda3\envs\maabangdream\python.exe -m pytest tests/ -v
+& $python -m pytest tests/ -v
 ```
 
 提交前还要运行 `git diff --check` 并检查未跟踪文件。涉及任务生命周期、部署或实时输入时，

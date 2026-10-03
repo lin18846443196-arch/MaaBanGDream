@@ -247,6 +247,7 @@ class ReplayTests(unittest.TestCase):
         if report["prediction"]:
             self.assertLess(abs(report["prediction"]["error_ms"]), 10)
 
+    @unittest.skipUnless((ROOT / "tests/fixtures/team/waiting-members.png").is_file(), "需要本地等待成员截图")
     def test_real_waiting_members_fixture_never_predicts(self):
         image = ROOT / "tests/fixtures/team/waiting-members.png"
         frames = [replay.ManifestFrame(image, index, index * .04 - .001, index * .04 + .001,
@@ -257,7 +258,10 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual(report["status"], "insufficient-evidence")
 
     def test_manifest_requires_intervals_and_explicit_freshness(self):
-        image = ROOT / "tests/fixtures/team/waiting-members.png"
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        image = Path(directory.name) / "metadata.png"
+        image.write_bytes(cv2.imencode(".png", np.zeros((720, 1280, 3), np.uint8))[1].tobytes())
         frames, report = replay.parse_manifest([{"image": str(image), "timestamp": 1, "fps": 60}], ROOT)
         self.assertFalse(frames)
         self.assertIn("capture-request-interval-or-freshness-missing", report["exclusion_reasons"])
@@ -280,7 +284,10 @@ class ReplayTests(unittest.TestCase):
         self.assertGreater(report["excluded_rows"], 0)
 
     def test_recording_auto_loads_new_native_startup_manifest(self):
-        image = ROOT / "tests/fixtures/team/waiting-members.png"
+        image_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(image_directory.cleanup)
+        image = Path(image_directory.name) / "metadata.png"
+        image.write_bytes(cv2.imencode(".png", np.zeros((720, 1280, 3), np.uint8))[1].tobytes())
         rows = [{"image": str(image), "capture_id": index, "is_new": True,
                  "request_started_at": index * .02, "completed_at": index * .02 + .002,
                  "consumed_at": index * .02 + .003, "source": "retained-runtime-startup-ring"}

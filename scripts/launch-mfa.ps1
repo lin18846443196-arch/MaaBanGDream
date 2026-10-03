@@ -160,7 +160,7 @@ foreach ($relativeAsset in $obsoletePerformanceAssets) {
     }
 }
 
-foreach ($aboutAsset in @('docs/about.md', 'docs/contact.md', 'docs/announcement.md', 'docs/assets/maabangdream-logo-v1.png')) {
+foreach ($aboutAsset in @('docs/about.md', 'docs/contact.md', 'docs/announcement.md', 'docs/assets/rhythmpilot-logo.png')) {
     $aboutDestination = Join-Path $MfaRoot $aboutAsset
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $aboutDestination) | Out-Null
     Copy-Item -LiteralPath (Join-Path $projectRoot $aboutAsset) -Destination $aboutDestination -Force

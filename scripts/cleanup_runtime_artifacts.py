@@ -251,7 +251,7 @@ def main() -> int:
     try:
         root = args.root.resolve(strict=True)
         if args.skip_if_running and mfa_is_running(root):
-            print("Runtime artifact cleanup skipped: MaaBanGDream is already running.")
+            print("Runtime artifact cleanup skipped: RhythmPilot is already running.")
             return 0
         result = clean_runtime_artifacts(root, dry_run=args.dry_run)
         if args.json:
