@@ -16,3 +16,8 @@ __pycache__/
 /agent/realtime/native/*.lib
 /agent/realtime/native/*.pdb
 /native/realtime/build/
+/docs/team-live-recording-review/
+/tests/fixtures/challenge/
+/tests/fixtures/cooperative-*/
+/tests/fixtures/formal-preflight/
+/tests/fixtures/team/
