@@ -1,4 +1,11 @@
 {
+  "ChallengeRefreshScreen": {
+    "recognition": "DirectHit",
+    "action": "DoNothing",
+    "pre_delay": 0,
+    "post_delay": 0,
+    "rate_limit": 0
+  },
   "ChallengeLive": {
     "recognition": "DirectHit",
     "action": "DoNothing",
@@ -25,7 +32,7 @@
     "action": "Custom",
     "custom_action": "ProcessConflictGuard",
     "next": [
-      "ChallengeRecover"
+      "ChallengeDisconnectJumpConfigure"
     ],
     "on_error": [
       "ChallengeFailure"
@@ -45,6 +52,16 @@
         ]
       }
     }
+  },
+  "ChallengeDisconnectJumpConfigure": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "ChallengeDisconnectJumpConfigure",
+    "custom_action_param": {
+      "disconnect_jump_enabled": false
+    },
+    "next": ["ChallengeRecover"],
+    "on_error": ["ChallengeFailure"]
   },
   "ChallengeRecover": {
     "recognition": "DirectHit",
@@ -83,7 +100,7 @@
       ]
     },
     "next": [
-      "ChallengeVisualSettingsGate"
+      "ChallengeSpeedSettingsGate"
     ],
     "focus": {
       "Node.Action.Failed": {
@@ -109,10 +126,19 @@
       "ChallengeFailure"
     ]
   },
-  "ChallengeVisualSettingsGate": {
+  "ChallengeSpeedSettingsGate": {
     "recognition": "DirectHit",
     "action": "Custom",
-    "custom_action": "RealtimeGameEffectSettingsGate",
+    "custom_action": "RealtimeGameSpeedSettingsGate",
+    "custom_action_param": {
+      "entry_mode": "home",
+      "difficulty": "Easy",
+      "require_profile": true,
+      "dpi": 240,
+      "game_fps": 60,
+      "render_quality": "standard",
+      "run_mode": "challenge"
+    },
     "next": [
       "ChallengeRoundGate"
     ],
@@ -121,7 +147,9 @@
     ]
   },
   "ChallengeRoundGate": {
-    "recognition": "DirectHit",
+    "recognition": "Custom",
+    "custom_recognition": "TaskRoundAvailable",
+    "custom_recognition_param": {"total": 1},
     "action": "Custom",
     "custom_action": "TaskProgress",
     "custom_action_param": {
@@ -130,7 +158,7 @@
       "total": 1,
       "phase": "start"
     },
-    "max_hit": 1,
+    "on_error": ["ChallengeFailure"],
     "next": [
       "ChallengeDebugGate"
     ]
@@ -244,9 +272,8 @@
     }
   },
   "ChallengeHomeMarker": {
-    "recognition": "TemplateMatch",
-    "template": "home_marker.png",
-    "threshold": 0.75,
+    "recognition": "And",
+    "all_of": ["TeamHomeBand", "TeamHomeLive"],
     "action": "DoNothing",
     "next": [
       "ChallengeHomeLive"
@@ -257,8 +284,9 @@
   },
   "ChallengeHomeLive": {
     "recognition": "TemplateMatch",
-    "template": "home_live.png",
-    "threshold": 0.82,
+    "template": "team/home_live.png",
+    "roi": [1094, 586, 152, 115],
+    "threshold": 0.9,
     "action": "Custom",
     "custom_action": "ForegroundClick",
     "target": [
@@ -364,16 +392,25 @@
     ]
   },
   "ChallengeSongMarker": {
+    "recognition": "Custom",
+    "custom_recognition": "ChallengeSongPageVisible",
+    "action": "DoNothing",
+    "next": ["ChallengeDifficulty"],
+    "on_error": ["ChallengeEnsureHome"]
+  },
+  "ChallengeSongHeaderMarker": {
     "recognition": "TemplateMatch",
     "template": "challenge_song_select_marker.png",
     "threshold": 0.88,
-    "action": "DoNothing",
-    "next": [
-      "ChallengeDifficulty"
-    ],
-    "on_error": [
-      "ChallengeEnsureHome"
-    ]
+    "roi": [110, 10, 350, 50],
+    "action": "DoNothing"
+  },
+  "ChallengeSongPageMarker": {
+    "recognition": "TemplateMatch",
+    "template": "challenge_song_select_page.png",
+    "threshold": 0.90,
+    "roi": [120, 50, 175, 38],
+    "action": "DoNothing"
   },
   "ChallengeDifficulty": {
     "recognition": "DirectHit",
@@ -382,7 +419,17 @@
     "custom_action_param": {
       "difficulty": "Easy",
       "max_attempts": 3,
-      "mode": "challenge"
+      "mode": "challenge",
+      "page_guard": "ChallengeSongMarker",
+      "refresh_node": "CommonRefreshScreen",
+      "song_title_roi": [200, 327, 368, 38],
+      "difficulty_targets": {
+        "Easy": [709, 545],
+        "Normal": [822, 545],
+        "Hard": [934, 545],
+        "Expert": [1048, 545],
+        "Special": [1180, 545]
+      }
     },
     "next": [
       "ChallengePrepare"
@@ -400,9 +447,8 @@
     }
   },
   "ChallengePrepare": {
-    "recognition": "TemplateMatch",
-    "template": "live_prepare.png",
-    "threshold": 0.88,
+    "recognition": "And",
+    "all_of": ["ChallengeSongMarker", "ChallengePrepareButton"],
     "action": "Custom",
     "custom_action": "ForegroundClick",
     "target": [
@@ -429,6 +475,7 @@
   "ChallengePointMarker": {
     "recognition": "TemplateMatch",
     "template": "challenge_points_marker.png",
+    "roi": [380, 50, 540, 60],
     "threshold": 0.88,
     "action": "DoNothing",
     "next": [
@@ -441,15 +488,12 @@
   "ChallengePointSelect": {
     "recognition": "DirectHit",
     "action": "Custom",
-    "custom_action": "ForegroundClick",
-    "target": [
-      875,
-      212
-    ],
-    "post_delay": 500,
+    "custom_action": "ChallengePointsSelect",
+    "post_delay": 0,
     "next": [
       "ChallengePointConfirm"
     ],
+    "on_error": ["ChallengeFailure"],
     "focus": {
       "Node.Action.Failed": {
         "content": "❌ 点击失败：游戏不在前台、控制器拒绝输入或页面位置已变化",
@@ -462,15 +506,12 @@
   "ChallengePointConfirm": {
     "recognition": "DirectHit",
     "action": "Custom",
-    "custom_action": "ForegroundClick",
-    "target": [
-      770,
-      620
-    ],
+    "custom_action": "ChallengePointsConfirm",
     "post_delay": 1000,
     "next": [
       "ChallengeBandMarker"
     ],
+    "on_error": ["ChallengeFailure"],
     "focus": {
       "Node.Action.Failed": {
         "content": "❌ 点击失败：游戏不在前台、控制器拒绝输入或页面位置已变化",
@@ -486,6 +527,10 @@
     "threshold": 0.88,
     "action": "Custom",
     "custom_action": "RealtimeFormalPreflight",
+    "custom_action_param": {
+      "page_guard": "ChallengeBandMarker",
+      "refresh_node": "CommonRefreshScreen"
+    },
     "next": [
       "ChallengeSettingsGate"
     ],
@@ -495,7 +540,7 @@
     ],
     "focus": {
       "Node.Action.Failed": {
-        "content": "❌ 正式演奏前置检查失败：游戏前台、截图或触控环境不满足要求",
+        "content": "❌ 正式演奏前置检查失败：请查看任务日志中 RealtimeFormalPreflight failed 的具体原因",
         "display": [
           "log"
         ]
@@ -512,7 +557,9 @@
       "dpi": 240,
       "game_fps": 60,
       "render_quality": "standard",
-      "run_mode": "challenge"
+      "run_mode": "challenge",
+      "confirm_preparation_identity": true,
+      "refresh_node": "CommonRefreshScreen"
     },
     "next": [
       "ChallengeStart"
@@ -531,7 +578,7 @@
     }
   },
   "ChallengePointStillOpen": {
-    "recognition": "DirectHit",
+    "recognition": "TemplateMatch",
     "template": "challenge_points_marker.png",
     "threshold": 0.88,
     "action": "Custom",
@@ -550,6 +597,8 @@
     "action": "Custom",
     "custom_action": "ForegroundClick",
     "target": true,
+    "pre_delay": 0,
+    "post_delay": 0,
     "next": [
       "ChallengePlay"
     ],
@@ -568,7 +617,7 @@
   "ChallengePlay": {
     "recognition": "DirectHit",
     "action": "Custom",
-    "custom_action": "RealtimeProfilePlay",
+    "custom_action": "ChallengeProfilePlay",
     "custom_action_param": {
       "difficulty": "Easy",
       "require_profile": true,
@@ -597,7 +646,7 @@
   "ChallengePlayNormal": {
     "recognition": "DirectHit",
     "action": "Custom",
-    "custom_action": "RealtimeProfilePlay",
+    "custom_action": "ChallengeProfilePlay",
     "custom_action_param": {
       "difficulty": "Normal",
       "require_profile": true,
@@ -626,7 +675,7 @@
   "ChallengePlayHard": {
     "recognition": "DirectHit",
     "action": "Custom",
-    "custom_action": "RealtimeProfilePlay",
+    "custom_action": "ChallengeProfilePlay",
     "custom_action_param": {
       "difficulty": "Hard",
       "require_profile": true,
@@ -655,7 +704,7 @@
   "ChallengePlayExpert": {
     "recognition": "DirectHit",
     "action": "Custom",
-    "custom_action": "RealtimeProfilePlay",
+    "custom_action": "ChallengeProfilePlay",
     "custom_action_param": {
       "difficulty": "Expert",
       "require_profile": true,
@@ -684,7 +733,7 @@
   "ChallengePlaySpecial": {
     "recognition": "DirectHit",
     "action": "Custom",
-    "custom_action": "RealtimeProfilePlay",
+    "custom_action": "ChallengeProfilePlay",
     "custom_action_param": {
       "difficulty": "Special",
       "require_profile": true,
@@ -713,7 +762,7 @@
   "ChallengeReturnHome": {
     "recognition": "DirectHit",
     "action": "Custom",
-    "custom_action": "CommonRecover",
+    "custom_action": "CompletedLiveRecover",
     "custom_action_param": {
       "home_node": "ChallengeHomeMarker",
       "modal_cancel_nodes": [
@@ -769,6 +818,7 @@
       "task_name": "ChallengeLive",
       "label": "挑战演出",
       "status": "failure",
+      "reason_source": "latest",
       "reason": "挑战演出流程未完成：未到达演出结算或主页恢复失败"
     }
   },
@@ -838,6 +888,47 @@
       "label": "挑战演出",
       "status": "failure",
       "reason": "当前没有可用的挑战演出活动"
+    }
+  },
+  "ChallengePrepareButton": {
+    "recognition": "TemplateMatch",
+    "template": "live_prepare.png",
+    "roi": [950, 610, 245, 80],
+    "threshold": 0.88,
+    "action": "DoNothing"
+  },
+  "ChallengePreLiveSettingsConfirm": {
+    "recognition": "TemplateMatch",
+    "template": "pre_live_settings_confirm.png",
+    "roi": [600, 520, 380, 180],
+    "threshold": 0.88,
+    "action": "DoNothing"
+  },
+  "ChallengePointsExhaustedRecover": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "CommonRecover",
+    "custom_action_param": {
+      "home_node": "ChallengeHomeMarker",
+      "modal_cancel_nodes": ["QuitConfirmCancel"],
+      "click_nodes": ["AutoLiveCommonClose"],
+      "escape_interval_ms": 1000,
+      "escape_timeout_ms": 15000,
+      "restart_limit": 0
+    },
+    "next": ["ChallengePointsExhausted"],
+    "on_error": ["ChallengeFailure"]
+  },
+  "ChallengePointsExhausted": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "TaskOutcome",
+    "custom_action_param": {
+      "task_name": "ChallengeLive",
+      "label": "挑战演出",
+      "status": "success",
+      "completed_only": true,
+      "reason": "所持挑战点数不足 200，已正常结束"
     }
   },
   "ChallengeRoundCompleted": {

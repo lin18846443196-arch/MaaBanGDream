@@ -1,14 +1,15 @@
 {
   "$schema": "https://raw.githubusercontent.com/MaaXYZ/MaaFramework/main/tools/interface.schema.json",
   "interface_version": 2,
-  "name": "MaaBanGDream",
-  "label": "BanG Dream! 自动化（MaaFramework）",
-  "version": "1.3.7",
+  "name": "YesBanGDream",
+  "label": "YesBanGDream · BanG Dream! 自动化",
+  "version": "2.0.0",
   "description": "docs/about.md",
-  "about_icon": "docs/assets/maabangdream-logo-v1.png",
+  "about_icon": "docs/assets/yesbangdream-logo.png",
   "contact": "docs/contact.md",
-  "license": "GPL-3.0-only",
-  "github": "https://github.com/coatcn1/MaaBanGDream",
+  "welcome": "https://raw.githubusercontent.com/woshiyigeanniu/YesBanGDream/main/docs/announcement.md",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "github": "https://github.com/woshiyigeanniu/YesBanGDream",
   "controller": [
     {
       "name": "Android",
@@ -70,14 +71,28 @@
         "CooperativeDifficulty",
         "CooperativeCount",
         "CooperativeMemberExitPolicy",
+        "CooperativeSongChoice",
         "CooperativeDebug",
         "CooperativeDisconnectJump"
       ]
     },
     {
+      "name": "TeamLive",
+      "label": "👥 团队演出",
+      "description": "普通公开匹配，等待满员自动开演；每局结算后回主页重新进入。网络弹窗自动恢复，演奏失败断网逃生后重启；断网需模拟器 root，不可用时直接重启。需先完成对应难度校准。",
+      "entry": "TeamLive",
+      "option": [
+        "TeamDifficulty",
+        "TeamCount",
+        "TeamWait",
+        "TeamRetry",
+        "TeamDebug"
+      ]
+    },
+    {
       "name": "ContinuousRealtimeLive",
       "label": "⚡ 一键实时演奏",
-      "description": "持续检测演奏页面并自动演奏，不导航、不确认、不读取结算；需在最近 15 分钟内完成一次游戏视觉设置读回复核。",
+      "description": "识别开场封面与标题，确认本地曲目后按任务所选难度自动演奏一首；识别演出完成后任务自动结束，不导航、不读取结算。流速检查开关开启时需有最近 15 分钟内的流速读回，关闭时不检查。",
       "entry": "ContinuousRealtimeLive",
       "option": [
         "ContinuousRealtimeDifficulty",
@@ -105,13 +120,24 @@
     {
       "name": "ChallengeLive",
       "label": "🏆 挑战演出",
-      "description": "使用已校准的实时引擎演奏当前活动挑战曲。",
+      "description": "自动识别剩余挑战点数，按可用点数优先选择 8 倍、4 倍、2 倍、1 倍，使用已校准的实时引擎完成当前活动挑战曲。",
       "entry": "ChallengeLive",
       "option": [
         "ChallengeDifficulty",
-        "ChallengePoints",
         "ChallengeCount",
-        "ChallengeDebug"
+        "ChallengeDebug",
+        "ChallengeDisconnectJump"
+      ]
+    },
+    {
+      "name": "MedleyLive",
+      "label": "🎼 组曲演奏",
+      "description": "按输入次数完成整轮巡回演出，一首歌计为一次演奏；当前每轮固定三首，因此次数必须是 3 的倍数。自由巡演可选择当前曲目或每首随机，课题巡演使用页面预设歌曲与难度。",
+      "entry": "MedleyLive",
+      "option": [
+        "MedleyTourType",
+        "MedleyCount",
+        "MedleyDebug"
       ]
     },
     {
@@ -127,6 +153,214 @@
     }
   ],
   "option": {
+    "MedleyTourType": {
+      "type": "select",
+      "label": "巡演类型",
+      "default_case": "Free",
+      "cases": [
+        {
+          "name": "Free",
+          "label": "自由巡演",
+          "option": [
+            "MedleySongMode",
+            "MedleyDifficulty"
+          ],
+          "pipeline_override": {
+            "MedleyTourTypeConfigure": {
+              "custom_action_param": {
+                "reset": true,
+                "tour_type": "free"
+              }
+            }
+          }
+        },
+        {
+          "name": "Task",
+          "label": "课题巡演（使用预设难度）",
+          "pipeline_override": {
+            "MedleyTourTypeConfigure": {
+              "custom_action_param": {
+                "reset": true,
+                "tour_type": "task"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "MedleySongMode": {
+      "type": "select",
+      "label": "自由巡演歌曲选择",
+      "default_case": "Random",
+      "cases": [
+        {
+          "name": "Current",
+          "label": "当前曲目",
+          "pipeline_override": {
+            "MedleySongModeConfigure": {
+              "custom_action_param": {
+                "song_mode": "current"
+              }
+            }
+          }
+        },
+        {
+          "name": "Random",
+          "label": "每首随机选曲",
+          "pipeline_override": {
+            "MedleySongModeConfigure": {
+              "custom_action_param": {
+                "song_mode": "random"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "MedleyCount": {
+      "type": "input",
+      "label": "演奏次数",
+      "inputs": [
+        {
+          "name": "Count",
+          "label": "次数（3 的倍数）",
+          "default": "3",
+          "pipeline_type": "int",
+          "verify": "^(?:0|[369]|[369][0369]|[147][258]|[258][147]|[369](?:[0369][0369]|[147][258]|[258][147])|[147](?:[0369][258]|[147][147]|[258][0369])|[258](?:[0369][147]|[147][0369]|[258][258]))$",
+          "pattern_msg": "请输入 3 到 999 之间且为 3 的倍数的整数；0 表示无限演出。"
+        }
+      ],
+      "pipeline_override": {
+        "MedleyCountConfigure": {
+          "custom_action_param": {
+            "count": "{Count}"
+          }
+        },
+        "MedleyComplete": {
+          "custom_action_param": {
+            "task_name": "MedleyLive",
+            "label": "组曲演奏",
+            "total": "{Count}",
+            "status": "success"
+          }
+        },
+        "MedleyFailure": {
+          "custom_action_param": {
+            "task_name": "MedleyLive",
+            "label": "组曲演奏",
+            "total": "{Count}",
+            "status": "failure",
+            "reason": "组曲演奏流程未完成",
+            "reason_source": "latest"
+          }
+        }
+      }
+    },
+    "MedleyDifficulty": {
+      "type": "select",
+      "label": "自由巡演统一难度",
+      "default_case": "Expert",
+      "cases": [
+        {
+          "name": "Easy",
+          "label": "Easy",
+          "pipeline_override": {
+            "MedleyDifficultyConfigure": {
+              "custom_action_param": {
+                "difficulty": "Easy"
+              }
+            }
+          }
+        },
+        {
+          "name": "Normal",
+          "label": "Normal",
+          "pipeline_override": {
+            "MedleyDifficultyConfigure": {
+              "custom_action_param": {
+                "difficulty": "Normal"
+              }
+            }
+          }
+        },
+        {
+          "name": "Hard",
+          "label": "Hard",
+          "pipeline_override": {
+            "MedleyDifficultyConfigure": {
+              "custom_action_param": {
+                "difficulty": "Hard"
+              }
+            }
+          }
+        },
+        {
+          "name": "Expert",
+          "label": "Expert",
+          "pipeline_override": {
+            "MedleyDifficultyConfigure": {
+              "custom_action_param": {
+                "difficulty": "Expert"
+              }
+            }
+          }
+        },
+        {
+          "name": "Special",
+          "label": "Special（不可选时回退 Expert）",
+          "pipeline_override": {
+            "MedleyDifficultyConfigure": {
+              "custom_action_param": {
+                "difficulty": "Special"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "MedleyDebug": {
+      "type": "select",
+      "label": "诊断记录",
+      "default_case": "Light",
+      "cases": [
+        {
+          "name": "Light",
+          "label": "轻量 Trace（推荐）",
+          "pipeline_override": {
+            "MedleyDebugConfigure": {
+              "custom_action_param": {
+                "debug_recording": false,
+                "diagnostic_trace": true
+              }
+            }
+          }
+        },
+        {
+          "name": "Off",
+          "label": "完全关闭（只保存结果）",
+          "pipeline_override": {
+            "MedleyDebugConfigure": {
+              "custom_action_param": {
+                "debug_recording": false,
+                "diagnostic_trace": false
+              }
+            }
+          }
+        },
+        {
+          "name": "Full",
+          "label": "完整录像（每首独立 MKV + Trace）",
+          "pipeline_override": {
+            "MedleyDebugConfigure": {
+              "custom_action_param": {
+                "debug_recording": true,
+                "diagnostic_trace": true
+              }
+            }
+          }
+        }
+      ]
+    },
     "CooperativeEntryMethod": {
       "type": "select",
       "label": "入房方式",
@@ -135,30 +369,46 @@
         {
           "name": "Normal",
           "label": "普通房间匹配",
-          "option": ["CooperativeRoomTier"],
+          "option": [
+            "CooperativeRoomTier"
+          ],
           "pipeline_override": {
             "CooperativeEntryConfigure": {
-              "custom_action_param": {"reset": true, "entry_method": "normal"}
+              "custom_action_param": {
+                "reset": true,
+                "entry_method": "normal"
+              }
             }
           }
         },
         {
           "name": "Friend",
           "label": "好友邀请房间",
-          "option": ["CooperativePostLiveAction"],
+          "option": [
+            "CooperativePostLiveAction"
+          ],
           "pipeline_override": {
             "CooperativeEntryConfigure": {
-              "custom_action_param": {"reset": true, "entry_method": "friend"}
+              "custom_action_param": {
+                "reset": true,
+                "entry_method": "friend"
+              }
             }
           }
         },
         {
           "name": "Private",
           "label": "输入房间号",
-          "option": ["CooperativeRoomCode", "CooperativePostLiveAction"],
+          "option": [
+            "CooperativeRoomCode",
+            "CooperativePostLiveAction"
+          ],
           "pipeline_override": {
             "CooperativeEntryConfigure": {
-              "custom_action_param": {"reset": true, "entry_method": "private"}
+              "custom_action_param": {
+                "reset": true,
+                "entry_method": "private"
+              }
             }
           }
         }
@@ -174,28 +424,44 @@
           "name": "Free",
           "label": "自由房间",
           "pipeline_override": {
-            "CooperativeTierConfigure": {"custom_action_param": {"room_tier": "free"}}
+            "CooperativeTierConfigure": {
+              "custom_action_param": {
+                "room_tier": "free"
+              }
+            }
           }
         },
         {
           "name": "Beginner",
           "label": "初级房间（70000）",
           "pipeline_override": {
-            "CooperativeTierConfigure": {"custom_action_param": {"room_tier": "beginner"}}
+            "CooperativeTierConfigure": {
+              "custom_action_param": {
+                "room_tier": "beginner"
+              }
+            }
           }
         },
         {
           "name": "Chief",
           "label": "首席房间（250000）",
           "pipeline_override": {
-            "CooperativeTierConfigure": {"custom_action_param": {"room_tier": "chief"}}
+            "CooperativeTierConfigure": {
+              "custom_action_param": {
+                "room_tier": "chief"
+              }
+            }
           }
         },
         {
           "name": "Legend",
           "label": "传奇房间（290000）",
           "pipeline_override": {
-            "CooperativeTierConfigure": {"custom_action_param": {"room_tier": "legend"}}
+            "CooperativeTierConfigure": {
+              "custom_action_param": {
+                "room_tier": "legend"
+              }
+            }
           }
         }
       ]
@@ -215,7 +481,9 @@
       ],
       "pipeline_override": {
         "CooperativeCodeConfigure": {
-          "custom_action_param": {"room_code": "{RoomCode}"}
+          "custom_action_param": {
+            "room_code": "{RoomCode}"
+          }
         }
       }
     },
@@ -228,13 +496,15 @@
           "label": "演出次数",
           "default": "1",
           "pipeline_type": "int",
-          "verify": "^(?:[1-9]|[1-9][0-9])$",
-          "pattern_msg": "请输入 1 到 99 的整数。"
+          "verify": "^(?:0|[1-9][0-9]{0,2})$",
+          "pattern_msg": "请输入 0 到 999 的整数；0 表示无限演出。"
         }
       ],
       "pipeline_override": {
         "CooperativeCountConfigure": {
-          "custom_action_param": {"count": "{Count}"}
+          "custom_action_param": {
+            "count": "{Count}"
+          }
         }
       }
     },
@@ -247,51 +517,123 @@
           "name": "Easy",
           "label": "Easy",
           "pipeline_override": {
-            "CooperativeDifficultyConfigure": {"custom_action_param": {"difficulty": "Easy"}}
+            "CooperativeDifficultyConfigure": {
+              "custom_action_param": {
+                "difficulty": "Easy"
+              }
+            },
+            "CooperativeSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Easy",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            }
           }
         },
         {
           "name": "Normal",
           "label": "Normal",
           "pipeline_override": {
-            "CooperativeDifficultyConfigure": {"custom_action_param": {"difficulty": "Normal"}}
+            "CooperativeDifficultyConfigure": {
+              "custom_action_param": {
+                "difficulty": "Normal"
+              }
+            },
+            "CooperativeSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Normal",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            }
           }
         },
         {
           "name": "Hard",
           "label": "Hard",
           "pipeline_override": {
-            "CooperativeDifficultyConfigure": {"custom_action_param": {"difficulty": "Hard"}}
+            "CooperativeDifficultyConfigure": {
+              "custom_action_param": {
+                "difficulty": "Hard"
+              }
+            },
+            "CooperativeSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Hard",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            }
           }
         },
         {
           "name": "Expert",
           "label": "Expert",
           "pipeline_override": {
-            "CooperativeDifficultyConfigure": {"custom_action_param": {"difficulty": "Expert"}}
+            "CooperativeDifficultyConfigure": {
+              "custom_action_param": {
+                "difficulty": "Expert"
+              }
+            },
+            "CooperativeSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Expert",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            }
           }
         },
         {
           "name": "Special",
           "label": "Special",
           "pipeline_override": {
-            "CooperativeDifficultyConfigure": {"custom_action_param": {"difficulty": "Special"}}
+            "CooperativeDifficultyConfigure": {
+              "custom_action_param": {
+                "difficulty": "Special"
+              }
+            },
+            "CooperativeSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Special",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            }
           }
         }
       ]
     },
     "CooperativePostLiveAction": {
       "type": "select",
-      "label": "演出结束后",
-      "description": "留在房间仅适用于好友邀请房间和房间号入房。",
+      "label": "后续轮次的房间",
+      "description": "控制后续轮次是否留在好友或房号房间。最后一轮点击确定返回主页；普通房间在后续轮次点击再次演出。",
       "default_case": "Exit",
       "cases": [
         {
           "name": "Exit",
-          "label": "退出房间并返回主页",
+          "label": "重新选择房间",
           "pipeline_override": {
             "CooperativePostLiveConfigure": {
-              "custom_action_param": {"post_live_action": "exit"}
+              "custom_action_param": {
+                "post_live_action": "exit"
+              }
             }
           }
         },
@@ -300,7 +642,9 @@
           "label": "留在当前房间",
           "pipeline_override": {
             "CooperativePostLiveConfigure": {
-              "custom_action_param": {"post_live_action": "stay"}
+              "custom_action_param": {
+                "post_live_action": "stay"
+              }
             }
           }
         }
@@ -316,7 +660,10 @@
           "label": "确认后报错结束",
           "pipeline_override": {
             "CooperativeMemberExitConfigure": {
-              "custom_action_param": {"member_exit_policy": "fail", "max_reconnects": 3}
+              "custom_action_param": {
+                "member_exit_policy": "fail",
+                "max_reconnects": 3
+              }
             }
           }
         },
@@ -325,7 +672,50 @@
           "label": "不报错并重新入房",
           "pipeline_override": {
             "CooperativeMemberExitConfigure": {
-              "custom_action_param": {"member_exit_policy": "reconnect", "max_reconnects": 3}
+              "custom_action_param": {
+                "member_exit_policy": "reconnect",
+                "max_reconnects": 3
+              }
+            }
+          }
+        }
+      ]
+    },
+    "CooperativeSongChoice": {
+      "type": "select",
+      "label": "歌曲选择",
+      "default_case": "Unspecified",
+      "cases": [
+        {
+          "name": "Unspecified",
+          "label": "不指定歌曲",
+          "pipeline_override": {
+            "CooperativeSongChoiceConfigure": {
+              "custom_action_param": {
+                "song_choice": "unspecified"
+              }
+            }
+          }
+        },
+        {
+          "name": "Random",
+          "label": "随机选曲（第一轮留 10 秒筛歌）",
+          "pipeline_override": {
+            "CooperativeSongChoiceConfigure": {
+              "custom_action_param": {
+                "song_choice": "random"
+              }
+            }
+          }
+        },
+        {
+          "name": "Current",
+          "label": "当前曲目（第一轮留 10 秒筛歌）",
+          "pipeline_override": {
+            "CooperativeSongChoiceConfigure": {
+              "custom_action_param": {
+                "song_choice": "current"
+              }
             }
           }
         }
@@ -554,10 +944,13 @@
           "label": "Easy",
           "pipeline_override": {
             "AutoLiveDifficulty": {
-              "target": [
-                715,
-                545
-              ]
+              "custom_action_param": {
+                "difficulty": "Easy",
+                "max_attempts": 3,
+                "verify_delay_seconds": 0.35,
+                "track_live_run": false,
+                "song_identity": false
+              }
             }
           }
         },
@@ -566,10 +959,13 @@
           "label": "Normal",
           "pipeline_override": {
             "AutoLiveDifficulty": {
-              "target": [
-                827,
-                545
-              ]
+              "custom_action_param": {
+                "difficulty": "Normal",
+                "max_attempts": 3,
+                "verify_delay_seconds": 0.35,
+                "track_live_run": false,
+                "song_identity": false
+              }
             }
           }
         },
@@ -578,10 +974,13 @@
           "label": "Hard",
           "pipeline_override": {
             "AutoLiveDifficulty": {
-              "target": [
-                940,
-                545
-              ]
+              "custom_action_param": {
+                "difficulty": "Hard",
+                "max_attempts": 3,
+                "verify_delay_seconds": 0.35,
+                "track_live_run": false,
+                "song_identity": false
+              }
             }
           }
         },
@@ -590,10 +989,13 @@
           "label": "Expert",
           "pipeline_override": {
             "AutoLiveDifficulty": {
-              "target": [
-                1051,
-                545
-              ]
+              "custom_action_param": {
+                "difficulty": "Expert",
+                "max_attempts": 3,
+                "verify_delay_seconds": 0.35,
+                "track_live_run": false,
+                "song_identity": false
+              }
             }
           }
         },
@@ -602,10 +1004,16 @@
           "label": "Special",
           "pipeline_override": {
             "AutoLiveDifficulty": {
-              "target": [
-                1180,
-                545
-              ]
+              "custom_action_param": {
+                "difficulty": "Special",
+                "max_attempts": 3,
+                "verify_delay_seconds": 0.35,
+                "track_live_run": false,
+                "song_identity": false,
+                "fallback_difficulties": [
+                  "Expert"
+                ]
+              }
             }
           }
         }
@@ -620,13 +1028,15 @@
           "label": "次数",
           "default": "1",
           "pipeline_type": "int",
-          "verify": "^(?:[1-9]|[1-9][0-9])$",
-          "pattern_msg": "请输入 1 到 99 的整数。"
+          "verify": "^(?:0|[1-9][0-9]{0,2})$",
+          "pattern_msg": "请输入 0 到 999 的整数；0 表示无限演出。"
         }
       ],
       "pipeline_override": {
         "AutoLiveRoundGate": {
-          "max_hit": "{Count}",
+          "custom_recognition_param": {
+            "total": "{Count}"
+          },
           "custom_action_param": {
             "task_name": "AutoLive",
             "label": "自动演出",
@@ -652,22 +1062,6 @@
             "RealtimeLiveFormalModeGate": {
               "next": [
                 "RealtimeLiveRequireProfile"
-              ]
-            }
-          }
-        },
-        {
-          "name": "VisualEvaluation",
-          "label": "视觉设置评估（实验）",
-          "pipeline_override": {
-            "RealtimeLiveFormalModeGate": {
-              "next": [
-                "RealtimeLiveVisualEvaluationRequireProfile"
-              ]
-            },
-            "RealtimeLiveFormalReady": {
-              "next": [
-                "RealtimeLiveVisualEvaluationSettingsGate"
               ]
             }
           }
@@ -712,6 +1106,16 @@
           "name": "Easy",
           "label": "Easy",
           "pipeline_override": {
+            "RealtimeLiveSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Easy",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            },
             "RealtimeLiveDifficulty": {
               "custom_action_param": {
                 "defer_song_title_to_preparation": true,
@@ -760,16 +1164,6 @@
                 "note_speed": 2.0
               }
             },
-            "RealtimeLiveVisualEvaluationRequireProfile": {
-              "custom_action_param": {
-                "difficulty": "Easy",
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "note_speed": 2.0,
-                "visual_evaluation": true
-              }
-            },
             "RealtimeLiveFormalSettingsGate": {
               "custom_action_param": {
                 "confirm_preparation_identity": true,
@@ -778,39 +1172,6 @@
                 "dpi": 240,
                 "game_fps": 60,
                 "render_quality": "standard"
-              }
-            },
-            "RealtimeLiveVisualEvaluationSettingsGate": {
-              "custom_action_param": {
-                "confirm_preparation_identity": true,
-                "difficulty": "Easy",
-                "require_profile": true,
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "visual_evaluation": true
-              }
-            },
-            "RealtimeLiveVisualEvaluationPlay": {
-              "custom_action_param": {
-                "difficulty": "Easy",
-                "require_profile": true,
-                "settings_gate_required": true,
-                "debug_recording": false,
-                "duration_seconds": 600,
-                "startup_timeout_seconds": 60,
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "note_speed": 2.0,
-                "wait_for_completion": true,
-                "completion_missing_frames": 120,
-                "require_completion": true,
-                "save_result_frame": true,
-                "result_back_attempts": 30,
-                "result_back_interval_seconds": 1.5,
-                "visual_evaluation": true,
-                "run_mode": "visual-evaluation"
               }
             },
             "RealtimeLiveRehearsalSettingsGate": {
@@ -830,6 +1191,16 @@
           "name": "Normal",
           "label": "Normal",
           "pipeline_override": {
+            "RealtimeLiveSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Normal",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            },
             "RealtimeLiveDifficulty": {
               "custom_action_param": {
                 "defer_song_title_to_preparation": true,
@@ -878,16 +1249,6 @@
                 "note_speed": 2.0
               }
             },
-            "RealtimeLiveVisualEvaluationRequireProfile": {
-              "custom_action_param": {
-                "difficulty": "Normal",
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "note_speed": 2.0,
-                "visual_evaluation": true
-              }
-            },
             "RealtimeLiveFormalSettingsGate": {
               "custom_action_param": {
                 "confirm_preparation_identity": true,
@@ -896,39 +1257,6 @@
                 "dpi": 240,
                 "game_fps": 60,
                 "render_quality": "standard"
-              }
-            },
-            "RealtimeLiveVisualEvaluationSettingsGate": {
-              "custom_action_param": {
-                "confirm_preparation_identity": true,
-                "difficulty": "Normal",
-                "require_profile": true,
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "visual_evaluation": true
-              }
-            },
-            "RealtimeLiveVisualEvaluationPlay": {
-              "custom_action_param": {
-                "difficulty": "Normal",
-                "require_profile": true,
-                "settings_gate_required": true,
-                "debug_recording": false,
-                "duration_seconds": 600,
-                "startup_timeout_seconds": 60,
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "note_speed": 2.0,
-                "wait_for_completion": true,
-                "completion_missing_frames": 120,
-                "require_completion": true,
-                "save_result_frame": true,
-                "result_back_attempts": 30,
-                "result_back_interval_seconds": 1.5,
-                "visual_evaluation": true,
-                "run_mode": "visual-evaluation"
               }
             },
             "RealtimeLiveRehearsalSettingsGate": {
@@ -948,6 +1276,16 @@
           "name": "Hard",
           "label": "Hard",
           "pipeline_override": {
+            "RealtimeLiveSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Hard",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            },
             "RealtimeLiveDifficulty": {
               "custom_action_param": {
                 "defer_song_title_to_preparation": true,
@@ -996,16 +1334,6 @@
                 "note_speed": 2.0
               }
             },
-            "RealtimeLiveVisualEvaluationRequireProfile": {
-              "custom_action_param": {
-                "difficulty": "Hard",
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "note_speed": 2.0,
-                "visual_evaluation": true
-              }
-            },
             "RealtimeLiveFormalSettingsGate": {
               "custom_action_param": {
                 "confirm_preparation_identity": true,
@@ -1014,39 +1342,6 @@
                 "dpi": 240,
                 "game_fps": 60,
                 "render_quality": "standard"
-              }
-            },
-            "RealtimeLiveVisualEvaluationSettingsGate": {
-              "custom_action_param": {
-                "confirm_preparation_identity": true,
-                "difficulty": "Hard",
-                "require_profile": true,
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "visual_evaluation": true
-              }
-            },
-            "RealtimeLiveVisualEvaluationPlay": {
-              "custom_action_param": {
-                "difficulty": "Hard",
-                "require_profile": true,
-                "settings_gate_required": true,
-                "debug_recording": false,
-                "duration_seconds": 600,
-                "startup_timeout_seconds": 60,
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "note_speed": 2.0,
-                "wait_for_completion": true,
-                "completion_missing_frames": 120,
-                "require_completion": true,
-                "save_result_frame": true,
-                "result_back_attempts": 30,
-                "result_back_interval_seconds": 1.5,
-                "visual_evaluation": true,
-                "run_mode": "visual-evaluation"
               }
             },
             "RealtimeLiveRehearsalSettingsGate": {
@@ -1066,6 +1361,16 @@
           "name": "Expert",
           "label": "Expert",
           "pipeline_override": {
+            "RealtimeLiveSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Expert",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            },
             "RealtimeLiveDifficulty": {
               "custom_action_param": {
                 "defer_song_title_to_preparation": true,
@@ -1114,16 +1419,6 @@
                 "note_speed": 5.0
               }
             },
-            "RealtimeLiveVisualEvaluationRequireProfile": {
-              "custom_action_param": {
-                "difficulty": "Expert",
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "note_speed": 5.0,
-                "visual_evaluation": true
-              }
-            },
             "RealtimeLiveFormalSettingsGate": {
               "custom_action_param": {
                 "confirm_preparation_identity": true,
@@ -1132,39 +1427,6 @@
                 "dpi": 240,
                 "game_fps": 60,
                 "render_quality": "standard"
-              }
-            },
-            "RealtimeLiveVisualEvaluationSettingsGate": {
-              "custom_action_param": {
-                "confirm_preparation_identity": true,
-                "difficulty": "Expert",
-                "require_profile": true,
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "visual_evaluation": true
-              }
-            },
-            "RealtimeLiveVisualEvaluationPlay": {
-              "custom_action_param": {
-                "difficulty": "Expert",
-                "require_profile": true,
-                "settings_gate_required": true,
-                "debug_recording": false,
-                "duration_seconds": 600,
-                "startup_timeout_seconds": 60,
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "note_speed": 5.0,
-                "wait_for_completion": true,
-                "completion_missing_frames": 120,
-                "require_completion": true,
-                "save_result_frame": true,
-                "result_back_attempts": 30,
-                "result_back_interval_seconds": 1.5,
-                "visual_evaluation": true,
-                "run_mode": "visual-evaluation"
               }
             },
             "RealtimeLiveRehearsalSettingsGate": {
@@ -1184,11 +1446,24 @@
           "name": "Special",
           "label": "Special",
           "pipeline_override": {
+            "RealtimeLiveSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Special",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            },
             "RealtimeLiveDifficulty": {
               "custom_action_param": {
                 "defer_song_title_to_preparation": true,
                 "difficulty": "Special",
-                "max_attempts": 3
+                "max_attempts": 3,
+                "fallback_difficulties": [
+                  "Expert"
+                ]
               }
             },
             "RealtimeLiveRehearsalStart": {
@@ -1232,16 +1507,6 @@
                 "note_speed": 5.0
               }
             },
-            "RealtimeLiveVisualEvaluationRequireProfile": {
-              "custom_action_param": {
-                "difficulty": "Special",
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "note_speed": 5.0,
-                "visual_evaluation": true
-              }
-            },
             "RealtimeLiveFormalSettingsGate": {
               "custom_action_param": {
                 "confirm_preparation_identity": true,
@@ -1250,39 +1515,6 @@
                 "dpi": 240,
                 "game_fps": 60,
                 "render_quality": "standard"
-              }
-            },
-            "RealtimeLiveVisualEvaluationSettingsGate": {
-              "custom_action_param": {
-                "confirm_preparation_identity": true,
-                "difficulty": "Special",
-                "require_profile": true,
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "visual_evaluation": true
-              }
-            },
-            "RealtimeLiveVisualEvaluationPlay": {
-              "custom_action_param": {
-                "difficulty": "Special",
-                "require_profile": true,
-                "settings_gate_required": true,
-                "debug_recording": false,
-                "duration_seconds": 600,
-                "startup_timeout_seconds": 60,
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "note_speed": 5.0,
-                "wait_for_completion": true,
-                "completion_missing_frames": 120,
-                "require_completion": true,
-                "save_result_frame": true,
-                "result_back_attempts": 30,
-                "result_back_interval_seconds": 1.5,
-                "visual_evaluation": true,
-                "run_mode": "visual-evaluation"
               }
             },
             "RealtimeLiveRehearsalSettingsGate": {
@@ -1309,13 +1541,15 @@
           "label": "次数",
           "default": "1",
           "pipeline_type": "int",
-          "verify": "^(?:[1-9]|[1-9][0-9])$",
-          "pattern_msg": "请输入 1 到 99 的整数。"
+          "verify": "^(?:0|[1-9][0-9]{0,2})$",
+          "pattern_msg": "请输入 0 到 999 的整数；0 表示无限演出。"
         }
       ],
       "pipeline_override": {
         "RealtimeLiveRoundGate": {
-          "max_hit": "{Count}",
+          "custom_recognition_param": {
+            "total": "{Count}"
+          },
           "custom_action_param": {
             "task_name": "RealtimeLive",
             "label": "单人实时演奏",
@@ -1377,13 +1611,10 @@
           "name": "Easy",
           "label": "Easy",
           "pipeline_override": {
-            "ContinuousRealtimeWatcher": {
+            "ContinuousRealtimeDifficultyConfigure": {
               "custom_action_param": {
-                "difficulty": "Easy",
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "debug_recording": false
+                "reset": true,
+                "difficulty": "Easy"
               }
             }
           }
@@ -1392,13 +1623,10 @@
           "name": "Normal",
           "label": "Normal",
           "pipeline_override": {
-            "ContinuousRealtimeWatcher": {
+            "ContinuousRealtimeDifficultyConfigure": {
               "custom_action_param": {
-                "difficulty": "Normal",
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "debug_recording": false
+                "reset": true,
+                "difficulty": "Normal"
               }
             }
           }
@@ -1407,13 +1635,10 @@
           "name": "Hard",
           "label": "Hard",
           "pipeline_override": {
-            "ContinuousRealtimeWatcher": {
+            "ContinuousRealtimeDifficultyConfigure": {
               "custom_action_param": {
-                "difficulty": "Hard",
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "debug_recording": false
+                "reset": true,
+                "difficulty": "Hard"
               }
             }
           }
@@ -1422,13 +1647,10 @@
           "name": "Expert",
           "label": "Expert",
           "pipeline_override": {
-            "ContinuousRealtimeWatcher": {
+            "ContinuousRealtimeDifficultyConfigure": {
               "custom_action_param": {
-                "difficulty": "Expert",
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "debug_recording": false
+                "reset": true,
+                "difficulty": "Expert"
               }
             }
           }
@@ -1437,13 +1659,10 @@
           "name": "Special",
           "label": "Special",
           "pipeline_override": {
-            "ContinuousRealtimeWatcher": {
+            "ContinuousRealtimeDifficultyConfigure": {
               "custom_action_param": {
-                "difficulty": "Special",
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "debug_recording": false
+                "reset": true,
+                "difficulty": "Special"
               }
             }
           }
@@ -1459,7 +1678,7 @@
           "name": "Light",
           "label": "轻量 Trace（推荐）",
           "pipeline_override": {
-            "ContinuousRealtimeWatcher": {
+            "ContinuousRealtimeDebugConfigure": {
               "custom_action_param": {
                 "debug_recording": false,
                 "diagnostic_trace": true
@@ -1471,7 +1690,7 @@
           "name": "Off",
           "label": "完全关闭",
           "pipeline_override": {
-            "ContinuousRealtimeWatcher": {
+            "ContinuousRealtimeDebugConfigure": {
               "custom_action_param": {
                 "debug_recording": false,
                 "diagnostic_trace": false
@@ -1483,7 +1702,7 @@
           "name": "Full",
           "label": "完整录像（MKV + Trace，大文件）",
           "pipeline_override": {
-            "ContinuousRealtimeWatcher": {
+            "ContinuousRealtimeDebugConfigure": {
               "custom_action_param": {
                 "debug_recording": true,
                 "diagnostic_trace": true
@@ -1546,6 +1765,16 @@
           "name": "Easy",
           "label": "Easy",
           "pipeline_override": {
+            "RealtimeCalibrationSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Easy",
+                "require_profile": false,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            },
             "CalibrationDifficultySetting": {
               "custom_action_param": {
                 "difficulty": "Easy"
@@ -1557,6 +1786,16 @@
           "name": "Normal",
           "label": "Normal",
           "pipeline_override": {
+            "RealtimeCalibrationSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Normal",
+                "require_profile": false,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            },
             "CalibrationDifficultySetting": {
               "custom_action_param": {
                 "difficulty": "Normal"
@@ -1568,6 +1807,16 @@
           "name": "Hard",
           "label": "Hard",
           "pipeline_override": {
+            "RealtimeCalibrationSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Hard",
+                "require_profile": false,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            },
             "CalibrationDifficultySetting": {
               "custom_action_param": {
                 "difficulty": "Hard"
@@ -1579,6 +1828,16 @@
           "name": "Expert",
           "label": "Expert",
           "pipeline_override": {
+            "RealtimeCalibrationSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Expert",
+                "require_profile": false,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            },
             "CalibrationDifficultySetting": {
               "custom_action_param": {
                 "difficulty": "Expert"
@@ -1590,6 +1849,16 @@
           "name": "Special",
           "label": "Special",
           "pipeline_override": {
+            "RealtimeCalibrationSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Special",
+                "require_profile": false,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            },
             "CalibrationDifficultySetting": {
               "custom_action_param": {
                 "difficulty": "Special"
@@ -1651,10 +1920,51 @@
           "name": "Easy",
           "label": "Easy",
           "pipeline_override": {
+            "ChallengeSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Easy",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard",
+                "run_mode": "challenge"
+              }
+            },
             "ChallengeDifficulty": {
               "custom_action_param": {
                 "difficulty": "Easy",
                 "max_attempts": 3,
+                "page_guard": "ChallengeSongMarker",
+                "refresh_node": "CommonRefreshScreen",
+                "song_title_roi": [
+                  200,
+                  327,
+                  368,
+                  38
+                ],
+                "difficulty_targets": {
+                  "Easy": [
+                    709,
+                    545
+                  ],
+                  "Normal": [
+                    822,
+                    545
+                  ],
+                  "Hard": [
+                    934,
+                    545
+                  ],
+                  "Expert": [
+                    1048,
+                    545
+                  ],
+                  "Special": [
+                    1180,
+                    545
+                  ]
+                },
                 "mode": "challenge"
               }
             },
@@ -1675,7 +1985,9 @@
                 "dpi": 240,
                 "game_fps": 60,
                 "render_quality": "standard",
-                "run_mode": "challenge"
+                "run_mode": "challenge",
+                "confirm_preparation_identity": true,
+                "refresh_node": "CommonRefreshScreen"
               }
             },
             "ChallengeStart": {
@@ -1689,10 +2001,51 @@
           "name": "Normal",
           "label": "Normal",
           "pipeline_override": {
+            "ChallengeSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Normal",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard",
+                "run_mode": "challenge"
+              }
+            },
             "ChallengeDifficulty": {
               "custom_action_param": {
                 "difficulty": "Normal",
                 "max_attempts": 3,
+                "page_guard": "ChallengeSongMarker",
+                "refresh_node": "CommonRefreshScreen",
+                "song_title_roi": [
+                  200,
+                  327,
+                  368,
+                  38
+                ],
+                "difficulty_targets": {
+                  "Easy": [
+                    709,
+                    545
+                  ],
+                  "Normal": [
+                    822,
+                    545
+                  ],
+                  "Hard": [
+                    934,
+                    545
+                  ],
+                  "Expert": [
+                    1048,
+                    545
+                  ],
+                  "Special": [
+                    1180,
+                    545
+                  ]
+                },
                 "mode": "challenge"
               }
             },
@@ -1713,7 +2066,9 @@
                 "dpi": 240,
                 "game_fps": 60,
                 "render_quality": "standard",
-                "run_mode": "challenge"
+                "run_mode": "challenge",
+                "confirm_preparation_identity": true,
+                "refresh_node": "CommonRefreshScreen"
               }
             },
             "ChallengeStart": {
@@ -1727,10 +2082,51 @@
           "name": "Hard",
           "label": "Hard",
           "pipeline_override": {
+            "ChallengeSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Hard",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard",
+                "run_mode": "challenge"
+              }
+            },
             "ChallengeDifficulty": {
               "custom_action_param": {
                 "difficulty": "Hard",
                 "max_attempts": 3,
+                "page_guard": "ChallengeSongMarker",
+                "refresh_node": "CommonRefreshScreen",
+                "song_title_roi": [
+                  200,
+                  327,
+                  368,
+                  38
+                ],
+                "difficulty_targets": {
+                  "Easy": [
+                    709,
+                    545
+                  ],
+                  "Normal": [
+                    822,
+                    545
+                  ],
+                  "Hard": [
+                    934,
+                    545
+                  ],
+                  "Expert": [
+                    1048,
+                    545
+                  ],
+                  "Special": [
+                    1180,
+                    545
+                  ]
+                },
                 "mode": "challenge"
               }
             },
@@ -1751,7 +2147,9 @@
                 "dpi": 240,
                 "game_fps": 60,
                 "render_quality": "standard",
-                "run_mode": "challenge"
+                "run_mode": "challenge",
+                "confirm_preparation_identity": true,
+                "refresh_node": "CommonRefreshScreen"
               }
             },
             "ChallengeStart": {
@@ -1765,10 +2163,51 @@
           "name": "Expert",
           "label": "Expert",
           "pipeline_override": {
+            "ChallengeSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Expert",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard",
+                "run_mode": "challenge"
+              }
+            },
             "ChallengeDifficulty": {
               "custom_action_param": {
                 "difficulty": "Expert",
                 "max_attempts": 3,
+                "page_guard": "ChallengeSongMarker",
+                "refresh_node": "CommonRefreshScreen",
+                "song_title_roi": [
+                  200,
+                  327,
+                  368,
+                  38
+                ],
+                "difficulty_targets": {
+                  "Easy": [
+                    709,
+                    545
+                  ],
+                  "Normal": [
+                    822,
+                    545
+                  ],
+                  "Hard": [
+                    934,
+                    545
+                  ],
+                  "Expert": [
+                    1048,
+                    545
+                  ],
+                  "Special": [
+                    1180,
+                    545
+                  ]
+                },
                 "mode": "challenge"
               }
             },
@@ -1789,7 +2228,9 @@
                 "dpi": 240,
                 "game_fps": 60,
                 "render_quality": "standard",
-                "run_mode": "challenge"
+                "run_mode": "challenge",
+                "confirm_preparation_identity": true,
+                "refresh_node": "CommonRefreshScreen"
               }
             },
             "ChallengeStart": {
@@ -1803,11 +2244,55 @@
           "name": "Special",
           "label": "Special",
           "pipeline_override": {
+            "ChallengeSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Special",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard",
+                "run_mode": "challenge"
+              }
+            },
             "ChallengeDifficulty": {
               "custom_action_param": {
                 "difficulty": "Special",
                 "max_attempts": 3,
-                "mode": "challenge"
+                "page_guard": "ChallengeSongMarker",
+                "refresh_node": "CommonRefreshScreen",
+                "song_title_roi": [
+                  200,
+                  327,
+                  368,
+                  38
+                ],
+                "difficulty_targets": {
+                  "Easy": [
+                    709,
+                    545
+                  ],
+                  "Normal": [
+                    822,
+                    545
+                  ],
+                  "Hard": [
+                    934,
+                    545
+                  ],
+                  "Expert": [
+                    1048,
+                    545
+                  ],
+                  "Special": [
+                    1180,
+                    545
+                  ]
+                },
+                "mode": "challenge",
+                "fallback_difficulties": [
+                  "Expert"
+                ]
               }
             },
             "ChallengeProfileCheck": {
@@ -1827,7 +2312,9 @@
                 "dpi": 240,
                 "game_fps": 60,
                 "render_quality": "standard",
-                "run_mode": "challenge"
+                "run_mode": "challenge",
+                "confirm_preparation_identity": true,
+                "refresh_node": "CommonRefreshScreen"
               }
             },
             "ChallengeStart": {
@@ -1839,56 +2326,30 @@
         }
       ]
     },
-    "ChallengePoints": {
+    "ChallengeDisconnectJump": {
       "type": "select",
-      "label": "挑战点数",
-      "default_case": "200",
+      "label": "断网跳车",
+      "default_case": "Off",
       "cases": [
         {
-          "name": "200",
-          "label": "200",
+          "name": "Off",
+          "label": "关闭（推荐）",
           "pipeline_override": {
-            "ChallengePointSelect": {
-              "target": [
-                875,
-                212
-              ]
+            "ChallengeDisconnectJumpConfigure": {
+              "custom_action_param": {
+                "disconnect_jump_enabled": false
+              }
             }
           }
         },
         {
-          "name": "400",
-          "label": "400",
+          "name": "On",
+          "label": "生命归零断网跳车",
           "pipeline_override": {
-            "ChallengePointSelect": {
-              "target": [
-                875,
-                286
-              ]
-            }
-          }
-        },
-        {
-          "name": "800",
-          "label": "800",
-          "pipeline_override": {
-            "ChallengePointSelect": {
-              "target": [
-                875,
-                359
-              ]
-            }
-          }
-        },
-        {
-          "name": "1600",
-          "label": "1600",
-          "pipeline_override": {
-            "ChallengePointSelect": {
-              "target": [
-                875,
-                431
-              ]
+            "ChallengeDisconnectJumpConfigure": {
+              "custom_action_param": {
+                "disconnect_jump_enabled": true
+              }
             }
           }
         }
@@ -1896,20 +2357,22 @@
     },
     "ChallengeCount": {
       "type": "input",
-      "label": "挑战次数",
+      "label": "演出次数",
       "inputs": [
         {
           "name": "Count",
-          "label": "次数",
+          "label": "演出次数",
           "default": "1",
           "pipeline_type": "int",
-          "verify": "^(?:[1-9]|[1-9][0-9])$",
-          "pattern_msg": "请输入 1 到 99 的整数。"
+          "verify": "^(?:0|[1-9][0-9]{0,2})$",
+          "pattern_msg": "请输入 0 到 999 的整数；0 表示无限演出。"
         }
       ],
       "pipeline_override": {
         "ChallengeRoundGate": {
-          "max_hit": "{Count}",
+          "custom_recognition_param": {
+            "total": "{Count}"
+          },
           "custom_action_param": {
             "task_name": "ChallengeLive",
             "label": "挑战演出",
@@ -1961,6 +2424,164 @@
           }
         }
       ]
+    },
+    "TeamDifficulty": {
+      "type": "select",
+      "label": "团队难度",
+      "default_case": "Expert",
+      "cases": [
+        {
+          "name": "Easy",
+          "label": "Easy",
+          "pipeline_override": {
+            "TeamDifficultyConfigure": {
+              "custom_action_param": {
+                "difficulty": "Easy"
+              }
+            }
+          }
+        },
+        {
+          "name": "Normal",
+          "label": "Normal",
+          "pipeline_override": {
+            "TeamDifficultyConfigure": {
+              "custom_action_param": {
+                "difficulty": "Normal"
+              }
+            }
+          }
+        },
+        {
+          "name": "Hard",
+          "label": "Hard",
+          "pipeline_override": {
+            "TeamDifficultyConfigure": {
+              "custom_action_param": {
+                "difficulty": "Hard"
+              }
+            }
+          }
+        },
+        {
+          "name": "Expert",
+          "label": "Expert",
+          "pipeline_override": {
+            "TeamDifficultyConfigure": {
+              "custom_action_param": {
+                "difficulty": "Expert"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "TeamCount": {
+      "type": "input",
+      "label": "团队演出次数",
+      "inputs": [
+        {
+          "name": "Value",
+          "label": "团队演出次数",
+          "default": "1",
+          "pipeline_type": "int",
+          "verify": "^(?:0|[1-9][0-9]{0,2})$",
+          "pattern_msg": "请输入 0 到 999；0 表示无限演出。"
+        }
+      ],
+      "pipeline_override": {
+        "TeamCountConfigure": {
+          "custom_action_param": {
+            "count": "{Value}"
+          }
+        }
+      }
+    },
+    "TeamWait": {
+      "type": "input",
+      "label": "单阶段匹配等待（秒）",
+      "inputs": [
+        {
+          "name": "Value",
+          "label": "单阶段匹配等待（秒）",
+          "default": "180",
+          "pipeline_type": "int",
+          "verify": "^(?:[3-9][0-9]|[1-5][0-9]{2}|600)$",
+          "pattern_msg": "请输入 30 到 600 秒。"
+        }
+      ],
+      "pipeline_override": {
+        "TeamWaitConfigure": {
+          "custom_action_param": {
+            "wait_timeout_seconds": "{Value}"
+          }
+        }
+      }
+    },
+    "TeamRetry": {
+      "type": "input",
+      "label": "每局异常重试上限",
+      "inputs": [
+        {
+          "name": "Value",
+          "label": "每局异常重试上限",
+          "default": "2",
+          "pipeline_type": "int",
+          "verify": "^[0-5]$",
+          "pattern_msg": "请输入 0 到 5；入房和演奏分别限次。0 不重试，但失败后仍执行逃生回主页。"
+        }
+      ],
+      "pipeline_override": {
+        "TeamRetryConfigure": {
+          "custom_action_param": {
+            "max_retries": "{Value}"
+          }
+        }
+      }
+    },
+    "TeamDebug": {
+      "type": "select",
+      "label": "诊断记录",
+      "default_case": "Light",
+      "cases": [
+        {
+          "name": "Light",
+          "label": "轻量 Trace（推荐）",
+          "pipeline_override": {
+            "TeamDebugConfigure": {
+              "custom_action_param": {
+                "debug_recording": false,
+                "diagnostic_trace": true
+              }
+            }
+          }
+        },
+        {
+          "name": "Off",
+          "label": "完全关闭（只保存结果）",
+          "pipeline_override": {
+            "TeamDebugConfigure": {
+              "custom_action_param": {
+                "debug_recording": false,
+                "diagnostic_trace": false
+              }
+            }
+          }
+        },
+        {
+          "name": "Full",
+          "label": "完整录像（MKV + Trace，大文件）",
+          "pipeline_override": {
+            "TeamDebugConfigure": {
+              "custom_action_param": {
+                "debug_recording": true,
+                "diagnostic_trace": true
+              }
+            }
+          }
+        }
+      ]
     }
-  }
+  },
+  "icon": "docs/assets/yesbangdream-logo.png"
 }

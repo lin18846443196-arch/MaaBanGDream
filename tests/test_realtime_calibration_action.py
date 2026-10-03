@@ -137,6 +137,24 @@ def test_calibration_round_plan_forces_formal_mode_gate():
     ]
 
 
+def test_special_calibration_does_not_fallback_to_expert():
+    _, override = calibration_round_plan(
+        difficulty="Special",
+        note_speed=5.0,
+        calibration_debug=False,
+        formal=False,
+        play_node="RealtimeLivePlaySpecial",
+        offset=0,
+        report_path=Path("screencap/calibration-round-test.json"),
+    )
+
+    difficulty_params = override["RealtimeLiveDifficulty"][
+        "custom_action_param"
+    ]
+    assert difficulty_params["difficulty"] == "Special"
+    assert "fallback_difficulties" not in difficulty_params
+
+
 def test_calibration_round_plan_random_preserves_filter_and_excludes_used_songs():
     _, override = calibration_round_plan(
         difficulty="Hard",
@@ -358,15 +376,6 @@ def test_user_stop_after_nested_round_is_neutral_before_result_lookup(
     monkeypatch.setattr(calibration_action_module, "calibration_resume_mode", lambda: "auto")
     monkeypatch.setattr(calibration_action_module, "frame_resolution", lambda _image: (1280, 720))
     monkeypatch.setattr(
-        calibration_action_module,
-        "verified_game_visual_settings",
-        lambda: SimpleNamespace(
-            note_skin_type=1,
-            tap_effect=1,
-            judgement_assist_effect=True,
-        ),
-    )
-    monkeypatch.setattr(
         calibration_action_module, "result_report_snapshot", lambda _root: set(),
     )
     argv = SimpleNamespace(custom_action_param="{}")
@@ -375,3 +384,39 @@ def test_user_stop_after_nested_round_is_neutral_before_result_lookup(
     output = capsys.readouterr().out
     assert "RealtimeCalibration stopped=true" in output
     assert "RealtimeCalibration failed=" not in output
+
+
+def test_completed_calibration_result_error_pauses_neutrally_after_budget_without_accepting_profile(monkeypatch, tmp_path, capsys):
+    class Job:
+        def wait(self):
+            return self
+        def get(self):
+            return object()
+    context = SimpleNamespace(tasker=SimpleNamespace(stopping=False, controller=SimpleNamespace(post_screencap=lambda: Job())))
+    calls = []
+    def run_task(*args):
+        calls.append(args)
+        if len(calls) > 1:
+            context.tasker.stopping = True
+        else:
+            session = json.loads(next((tmp_path / "profiles/calibration-sessions").glob("*.json")).read_text(encoding="utf-8"))
+            Path(session["attempts"][-1]["report_path"]).parent.mkdir(parents=True, exist_ok=True)
+            Path(session["attempts"][-1]["report_path"]).write_text(json.dumps({
+                "valid": False, "completed": True, "survived": True,
+                "song_id": "song-A", "technical_reason": "PGGBM digits unstable",
+            }), encoding="utf-8")
+        return SimpleNamespace(status=SimpleNamespace(succeeded=True))
+    context.run_task = run_task
+    monkeypatch.setattr(calibration_action_module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(calibration_action_module, "calibration_difficulty", lambda: "Expert")
+    monkeypatch.setattr(calibration_action_module, "calibration_song_mode", lambda: "current")
+    monkeypatch.setattr(calibration_action_module, "calibration_resume_mode", lambda: "auto")
+    monkeypatch.setattr(calibration_action_module, "frame_resolution", lambda image: (1280, 720))
+    monkeypatch.setattr(RealtimeProfileStore, "runtime_options", lambda self: {
+        "calibration_note_speeds": {"Expert": 5.0}, "play_failure_retry_count": 0,
+    })
+    assert RealtimeCalibration().run(context, SimpleNamespace(custom_action_param="{}")) is True
+    assert len(calls) == 1
+    assert "pending_stage=" in capsys.readouterr().out
+    profiles = list((tmp_path / "profiles").glob("*.json"))
+    assert all(json.loads(path.read_text(encoding="utf-8")).get("accepted") is not True for path in profiles)

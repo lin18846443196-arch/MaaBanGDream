@@ -48,10 +48,18 @@ def identify_final_song(image: np.ndarray) -> SongIdentity:
     if (
         not isinstance(image, np.ndarray)
         or image.ndim != 3
-        or image.shape[0] < y + height
-        or image.shape[1] < x + width
+        or image.shape[0] < 449
+        or image.shape[1] < 1200
         or image.shape[2] < 3
     ):
+        return SongIdentity(UNKNOWN_SONG_ID, "unknown")
+    # Member cards occupy this same crop before loading. Require the black
+    # jacket-page flanks and coloured difficulty badge before hashing it.
+    for flank in (image[80:380, 80:420, :3], image[80:380, 860:1200, :3]):
+        if float((flank.max(axis=2) < 35).mean()) < 0.90:
+            return SongIdentity(UNKNOWN_SONG_ID, "unknown")
+    badge = cv2.cvtColor(image[421:449, 600:690, :3], cv2.COLOR_BGR2HSV)
+    if float((badge[:, :, 1] > 75).mean()) < 0.50:
         return SongIdentity(UNKNOWN_SONG_ID, "unknown")
     return fingerprint_jacket(image[y:y + height, x:x + width])
 

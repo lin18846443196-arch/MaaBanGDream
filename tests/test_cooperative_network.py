@@ -116,7 +116,7 @@ def test_gate_fails_closed_without_root_or_uid():
 
     no_uid = GameNetworkGate(_fake_shell(uid=None)[0])
     assert no_uid.block() is False
-    assert no_uid.last_error == "无法解析游戏 UID"
+    assert no_uid.last_error.startswith("无法解析游戏 UID")
     assert no_uid.restore() is True
 
 

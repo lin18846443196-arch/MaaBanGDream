@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)]
     [string]$MfaRoot,
     [string]$SourceRoot
@@ -12,6 +12,9 @@ $customizationCommit = 'd7b381b2fa6a09e140d925fb1504bac19ca1f921'
 $patch = Join-Path $projectRoot 'patches\mfaavalonia-v2.12.0-stop-status.patch'
 $deployedAssembly = Join-Path $MfaRoot 'MFAAvalonia.Core.dll'
 $deployedExecutable = Join-Path $MfaRoot 'MFAAvalonia.exe'
+if (Test-Path -LiteralPath (Join-Path $MfaRoot 'YesBanGDream.exe')) {
+    $deployedExecutable = Join-Path $MfaRoot 'YesBanGDream.exe'
+}
 $marker = Join-Path $MfaRoot '.maabangdream-mfa-stop-status.json'
 $backupDirectory = Join-Path $MfaRoot '.maabangdream-backup'
 
@@ -22,6 +25,7 @@ if (-not $SourceRoot) {
 $sourceGit = Join-Path $SourceRoot '.git'
 $coreProject = Join-Path $SourceRoot 'MFAAvalonia\MFAAvalonia.csproj'
 $desktopProject = Join-Path $SourceRoot 'MFAAvalonia.Desktop\MFAAvalonia.Desktop.csproj'
+$updaterProject = Join-Path $SourceRoot 'MFAUpdater\MFAUpdater.csproj'
 $applicationIcon = Join-Path $SourceRoot 'MFAAvalonia\Assets\logo.ico'
 $taskSource = Join-Path $SourceRoot 'MFAAvalonia\Helper\ValueType\MFATask.cs'
 $settingsSource = Join-Path $SourceRoot 'MFAAvalonia\Views\Pages\SettingsView.axaml'
@@ -38,6 +42,7 @@ foreach ($required in (
     $sourceGit,
     $coreProject,
     $desktopProject,
+    $updaterProject,
     $applicationIcon,
     $taskSource,
     $settingsSource,
@@ -127,6 +132,11 @@ if (Test-Path -LiteralPath $marker) {
         $metadata.custom_source_fingerprint -eq $customSourceFingerprint -and
         $metadata.patched_sha256 -eq $currentHash -and
         $metadata.patched_executable_sha256 -eq $currentExecutableHash -and
+        $metadata.desktop_host -eq 'YesBanGDream' -and
+        (Test-Path -LiteralPath (Join-Path $MfaRoot 'MFAUpdater.exe')) -and
+        $metadata.updater_sha256 -eq (Get-FileHash -LiteralPath (Join-Path $MfaRoot 'MFAUpdater.exe') -Algorithm SHA256).Hash -and
+        (Test-Path -LiteralPath (Join-Path $MfaRoot 'ColorTextBlock.Avalonia.dll')) -and
+        $metadata.markdown_sha256 -eq (Get-FileHash -LiteralPath (Join-Path $MfaRoot 'ColorTextBlock.Avalonia.dll') -Algorithm SHA256).Hash -and
         $metadata.customization_commit -eq $customizationCommit
     ) {
         Write-Host 'Customized MFA runtime and branding are already deployed.'
@@ -139,18 +149,35 @@ if (-not ($sdks -match '^10\.')) {
     throw 'Building the customized MFAAvalonia stop-status fix requires .NET SDK 10.'
 }
 
-& dotnet build $desktopProject -c Release -p:Platform=x64 --no-self-contained
+& dotnet build $desktopProject -c Release -p:Platform=x64 -p:MaaBanGDreamPackageBuild=true "-p:YesBanGDreamBrandRoot=$(Join-Path $projectRoot 'packaging')" --no-self-contained
 if ($LASTEXITCODE -ne 0) {
     throw 'Unable to build the customized MFAAvalonia runtime.'
 }
+$updaterPublish = Join-Path $SourceRoot 'bin\UpdaterPublish'
+& dotnet publish $updaterProject -c Release -r win-x64 --self-contained true `
+    -p:PublishSingleFile=true -p:PublishTrimmed=true -p:TrimMode=link `
+    "-p:CustomAfterMicrosoftCommonTargets=$(Join-Path $projectRoot 'packaging\YesBanGDream.targets')" -o $updaterPublish
+if ($LASTEXITCODE -ne 0) { throw 'Unable to publish the customized portable updater.' }
+$builtUpdater = Join-Path $updaterPublish 'MFAUpdater.exe'
+if (-not (Test-Path -LiteralPath $builtUpdater)) { throw 'Portable updater executable was not produced.' }
 
 $builtAssembly = Join-Path $SourceRoot 'MFAAvalonia\bin\x64\Release\net10.0\MFAAvalonia.Core.dll'
-$builtExecutable = Join-Path $SourceRoot 'bin\x64\Release\MFAAvalonia.exe'
+$builtMarkdownAssembly = Join-Path (Split-Path -Parent $builtAssembly) 'ColorTextBlock.Avalonia.dll'
+$builtExecutable = Join-Path $SourceRoot 'bin\x64\Release\YesBanGDream.exe'
 if (-not (Test-Path -LiteralPath $builtAssembly)) {
     throw "Customized MFAAvalonia assembly was not produced: $builtAssembly"
 }
 if (-not (Test-Path -LiteralPath $builtExecutable)) {
     throw "Customized MFAAvalonia executable was not produced: $builtExecutable"
+}
+if (-not (Test-Path -LiteralPath $builtMarkdownAssembly)) {
+    throw "Customized Markdown assembly was not produced: $builtMarkdownAssembly"
+}
+$hostFiles = @('YesBanGDream.exe', 'YesBanGDream.dll', 'YesBanGDream.deps.json', 'YesBanGDream.runtimeconfig.json')
+foreach ($hostFile in $hostFiles) {
+    if (-not (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $builtExecutable) $hostFile))) {
+        throw "Branded desktop host file is missing: $hostFile"
+    }
 }
 
 New-Item -ItemType Directory -Force -Path $backupDirectory | Out-Null
@@ -166,7 +193,32 @@ if (-not (Test-Path -LiteralPath $backupExecutable)) {
 }
 
 Copy-Item -LiteralPath $builtAssembly -Destination $deployedAssembly -Force
-Copy-Item -LiteralPath $builtExecutable -Destination $deployedExecutable -Force
+# 文本组件的布局修复不在 Core DLL 中，必须单独备份并同步。
+$deployedMarkdownAssembly = Join-Path $MfaRoot 'ColorTextBlock.Avalonia.dll'
+if (Test-Path -LiteralPath $deployedMarkdownAssembly) {
+    $oldMarkdownHash = (Get-FileHash -LiteralPath $deployedMarkdownAssembly -Algorithm SHA256).Hash
+    Copy-Item -LiteralPath $deployedMarkdownAssembly -Destination (Join-Path $backupDirectory "ColorTextBlock.Avalonia.$oldMarkdownHash.dll") -Force
+}
+Copy-Item -LiteralPath $builtMarkdownAssembly -Destination $deployedMarkdownAssembly -Force
+$deployedUpdater = Join-Path $MfaRoot 'MFAUpdater.exe'
+if (Test-Path -LiteralPath $deployedUpdater) {
+    $oldUpdaterHash = (Get-FileHash -LiteralPath $deployedUpdater -Algorithm SHA256).Hash
+    Copy-Item -LiteralPath $deployedUpdater -Destination (Join-Path $backupDirectory "MFAUpdater.$oldUpdaterHash.exe") -Force
+}
+Copy-Item -LiteralPath $builtUpdater -Destination $deployedUpdater -Force
+# 新宿主需要同时部署自己的依赖清单和托管入口，不能只改 EXE 文件名。
+foreach ($hostFile in $hostFiles) {
+    Copy-Item -LiteralPath (Join-Path (Split-Path -Parent $builtExecutable) $hostFile) -Destination (Join-Path $MfaRoot $hostFile) -Force
+}
+$deployedExecutable = Join-Path $MfaRoot 'YesBanGDream.exe'
+foreach ($legacyHostFile in @('MFAAvalonia.exe', 'MFAAvalonia.dll', 'MFAAvalonia.deps.json', 'MFAAvalonia.runtimeconfig.json')) {
+    $legacyHostPath = Join-Path $MfaRoot $legacyHostFile
+    if (Test-Path -LiteralPath $legacyHostPath -PathType Leaf) {
+        $legacyHash = (Get-FileHash -LiteralPath $legacyHostPath -Algorithm SHA256).Hash
+        Copy-Item -LiteralPath $legacyHostPath -Destination (Join-Path $backupDirectory "$legacyHostFile.$legacyHash") -Force
+        Remove-Item -LiteralPath $legacyHostPath -Force
+    }
+}
 $patchedHash = (Get-FileHash -LiteralPath $deployedAssembly -Algorithm SHA256).Hash
 $patchedExecutableHash = (Get-FileHash -LiteralPath $deployedExecutable -Algorithm SHA256).Hash
 [ordered]@{
@@ -179,6 +231,9 @@ $patchedExecutableHash = (Get-FileHash -LiteralPath $deployedExecutable -Algorit
     patch = 'mfaavalonia-v2.12.0-stop-status.patch'
     patched_sha256 = $patchedHash
     patched_executable_sha256 = $patchedExecutableHash
+    desktop_host = 'YesBanGDream'
+    updater_sha256 = (Get-FileHash -LiteralPath $deployedUpdater -Algorithm SHA256).Hash
+    markdown_sha256 = (Get-FileHash -LiteralPath $deployedMarkdownAssembly -Algorithm SHA256).Hash
     backup = $backupAssembly
     backup_executable = $backupExecutable
 } | ConvertTo-Json | Set-Content -LiteralPath $marker -Encoding utf8

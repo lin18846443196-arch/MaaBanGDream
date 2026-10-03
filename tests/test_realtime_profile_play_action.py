@@ -18,6 +18,7 @@ from agent.realtime.profile_play_action import (
     _effective_native_chart_selection,
     _result_report_payload,
     _write_calibration_report,
+    finalize_deferred_result,
     _recording_kind,
     collect_result,
     resolve_life_monitor_enabled,
@@ -25,7 +26,11 @@ from agent.realtime.profile_play_action import (
 )
 from agent.realtime.result_parser import LiveResult
 from agent.realtime.performance_settings_action import clear_verified_settings
-from agent.realtime.live_session import reset_live_run, update_live_run
+from agent.realtime.live_session import (
+    current_live_run,
+    reset_live_run,
+    update_live_run,
+)
 
 
 def test_recording_kind_distinguishes_play_types():
@@ -35,6 +40,7 @@ def test_recording_kind_distinguishes_play_types():
     assert _recording_kind("challenge") == "challenge"
     assert _recording_kind("calibration-rehearsal") == "calibration-rehearsal"
     assert _recording_kind("continuous") == "continuous"
+    assert _recording_kind("medley") == "medley"
     assert _recording_kind("unknown-mode") == "unknown-mode"
 
 
@@ -278,6 +284,52 @@ def test_profile_play_reuses_one_agent_controller_proxy(monkeypatch):
     assert engine_options[0]["startup_timeout_seconds"] == 60.0
     assert engine_construction_options[0]["life_detector"] is not None
     assert engine_construction_options[0]["life_guard"] is not None
+
+
+def test_profile_play_uses_confirmed_expert_for_special_fallback(monkeypatch):
+    reset_live_run(
+        mode="formal",
+        difficulty="Expert",
+        requested_difficulty="Special",
+        prepared_for_play=True,
+    )
+    verified_calls = []
+    resolved_params = []
+    monkeypatch.setattr(
+        profile_play_action,
+        "verified_settings",
+        lambda difficulty: verified_calls.append(difficulty),
+    )
+
+    def stop_after_resolution(context, params, *, controller=None):
+        resolved_params.append(dict(params))
+        raise RuntimeError("stop after effective difficulty resolution")
+
+    monkeypatch.setattr(
+        profile_play_action,
+        "resolve_profile",
+        stop_after_resolution,
+    )
+    context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=object()),
+    )
+    argv = SimpleNamespace(custom_action_param=json.dumps({
+        "difficulty": "Special",
+        "require_profile": True,
+    }))
+
+    with pytest.raises(
+        RuntimeError,
+        match="stop after effective difficulty resolution",
+    ):
+        RealtimeProfilePlay()._run(context, argv)
+
+    assert verified_calls == ["Expert"]
+    assert resolved_params[0]["difficulty"] == "Expert"
+    run = current_live_run()
+    assert run is not None
+    assert run.requested_difficulty == "Special"
+    assert run.difficulty == "Expert"
 
 
 def test_explicit_native_initialization_failure_never_falls_back(
@@ -709,6 +761,69 @@ def test_profile_falls_back_to_legacy_without_reliable_native_chart(
     assert engine_backends == [None]
 
 
+def test_pending_preparation_identity_requires_independent_final_cover(
+    monkeypatch, tmp_path,
+):
+    reset_live_run(
+        mode="formal", difficulty="Expert", prepared_for_play=True,
+    )
+    update_live_run(
+        song_id="selected-jacket",
+        song_level=27,
+        song_title="可信准备页标题",
+        song_title_confidence=0.95,
+        preparation_identity_pending_final_cover=True,
+    )
+    monkeypatch.setattr(profile_play_action, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(
+        profile_play_action.RealtimeProfileStore,
+        "runtime_options",
+        lambda *args, **kwargs: {
+            "chart_prediction_enabled": False,
+            "chart_predict_presses": False,
+            "native_realtime_enabled": False,
+        },
+    )
+    selected = _chart_selection("resource/charts/bestdori/55/expert.json")
+    monkeypatch.setattr(
+        profile_play_action,
+        "resolve_local_chart_for_run",
+        lambda *args, **kwargs: SimpleNamespace(
+            selection=selected, reason="selected chart",
+        ),
+    )
+    captured = {}
+
+    def final_cover_failed(*args, **kwargs):
+        captured["selection"] = args[2]
+        captured["repository"] = kwargs["repository"]
+        captured["require_title"] = kwargs["require_observed_title"]
+        captured["ignore_level"] = kwargs["ignore_preparation_level"]
+        return profile_play_action.FinalCoverWaitOutcome(
+            status="timeout", resolution=None, reason="cover missing",
+            frames=1, playfield_seen=True,
+        )
+
+    monkeypatch.setattr(
+        profile_play_action, "wait_for_final_cover", final_cover_failed,
+    )
+    context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=Controller()),
+    )
+    argv = SimpleNamespace(custom_action_param=json.dumps({
+        "difficulty": "Expert", "require_profile": False,
+        "confirm_final_cover": False,
+    }))
+
+    with pytest.raises(RuntimeError, match="最终封面未确认准备页延迟的歌曲身份"):
+        RealtimeProfilePlay()._run(context, argv)
+
+    assert captured["selection"] is None
+    assert captured["repository"] is not None
+    assert captured["require_title"] is True
+    assert captured["ignore_level"] is True
+
+
 def test_explicit_native_requires_controller_adb_endpoint():
     with pytest.raises(RuntimeError, match="adb_path.*adb_serial"):
         profile_play_action._native_adb_endpoint(Controller())
@@ -1010,7 +1125,7 @@ def test_incomplete_round_records_structured_result_and_calibration_can_retry(
         assert calibration["mode"] == run_mode
 
 
-def test_life_depleted_calibration_formal_round_can_retry(monkeypatch, tmp_path):
+def test_life_depleted_calibration_formal_round_reports_death_without_technical_retry(monkeypatch, tmp_path):
     reset_live_run(mode="calibration", difficulty="Hard")
     tasker = Tasker()
     context = SimpleNamespace(tasker=tasker)
@@ -1065,8 +1180,9 @@ def test_life_depleted_calibration_formal_round_can_retry(monkeypatch, tmp_path)
     }
     argv = SimpleNamespace(custom_action_param=json.dumps(params))
 
-    assert RealtimeProfilePlay()._run(context, argv) is True
-    assert reasons == []
+    monkeypatch.setattr(profile_play_action, "exit_failed_live", lambda _context: True)
+    assert RealtimeProfilePlay()._run(context, argv) is False
+    assert reasons == ["演出失败：生命值归零"]
     calibration = json.loads(
         (tmp_path / "screencap" / "calibration-life-retry.json").read_text(
             encoding="utf-8"
@@ -1076,6 +1192,7 @@ def test_life_depleted_calibration_formal_round_can_retry(monkeypatch, tmp_path)
     assert calibration["survived"] is False
     assert calibration["completed"] is False
     assert calibration["mode"] == "calibration-formal"
+    assert calibration["result_status"] == "life_failed"
 
 
 def test_engine_error_writes_invalid_result_with_partial_stats(monkeypatch, tmp_path):
@@ -1241,18 +1358,9 @@ def test_profile_resolution_failure_writes_correlated_preflight_result(
         profile="normal.json",
         verified_at=1.0,
     )
-    visual = SimpleNamespace(
-        note_skin_type=7,
-        tap_effect=5,
-        judgement_assist_effect=False,
-    )
     monkeypatch.setattr(
         "agent.realtime.profile_play_action.verified_settings",
         lambda _difficulty: verified,
-    )
-    monkeypatch.setattr(
-        "agent.realtime.profile_play_action.verified_game_visual_settings",
-        lambda: visual,
     )
     monkeypatch.setattr(
         "agent.realtime.profile_play_action.resolve_profile",
@@ -1292,14 +1400,11 @@ def test_profile_resolution_failure_writes_correlated_preflight_result(
     assert payload["profile"] == "normal.json"
     assert payload["settings"]["expected_note_speed"] == pytest.approx(3.5)
     assert payload["settings"]["actual_note_speed"] == pytest.approx(3.5)
-    assert payload["settings"]["note_skin_type"] == 7
-    assert payload["settings"]["tap_effect"] == 5
-    assert payload["settings"]["judgement_assist"] is False
     assert payload["reason"] == "ValueError: profile mismatch"
     assert failure_reasons == ["ValueError: profile mismatch"]
 
 
-def test_late_preflight_failure_preserves_verified_visual_and_speed(
+def test_late_preflight_failure_preserves_verified_speed(
     monkeypatch, tmp_path,
 ):
     reset_live_run(
@@ -1319,18 +1424,9 @@ def test_late_preflight_failure_preserves_verified_visual_and_speed(
         profile="normal.json",
         verified_at=1.0,
     )
-    visual = SimpleNamespace(
-        note_skin_type=7,
-        tap_effect=5,
-        judgement_assist_effect=False,
-    )
     monkeypatch.setattr(
         "agent.realtime.profile_play_action.verified_settings",
         lambda _difficulty: verified,
-    )
-    monkeypatch.setattr(
-        "agent.realtime.profile_play_action.verified_game_visual_settings",
-        lambda: visual,
     )
     monkeypatch.setattr(
         "agent.realtime.profile_play_action.RealtimeProfileStore.runtime_options",
@@ -1365,9 +1461,6 @@ def test_late_preflight_failure_preserves_verified_visual_and_speed(
     assert payload["settings"] == {
         "expected_note_speed": 3.5,
         "actual_note_speed": 3.5,
-        "note_skin_type": 7,
-        "tap_effect": 5,
-        "judgement_assist": False,
     }
 
 
@@ -1554,6 +1647,13 @@ def _completed_play_harness(
     expected_success=True,
     startup_timed_out=False,
     run_mode="formal",
+    defer_result_collection=False,
+    skip_result_check=False,
+    life_failed=False,
+    aborted_for_life=False,
+    engine_cleanup_failed=False,
+    native_report=None,
+    collected_result=None,
 ):
     reset_live_run(
         mode="pending",
@@ -1569,6 +1669,7 @@ def _completed_play_harness(
     settings = SimpleNamespace(
         target_fps=60,
         timing_offset_ms=0,
+        note_speed=5.0,
         profile_path=SimpleNamespace(name="easy.json"),
     )
     monkeypatch.setattr(
@@ -1582,7 +1683,33 @@ def _completed_play_harness(
     monkeypatch.setattr("agent.realtime.profile_play_action.PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(
         "agent.realtime.profile_play_action.RealtimeProfileStore.runtime_options",
-        lambda *args, **kwargs: {},
+        lambda *args, **kwargs: {
+            "skip_result_check": skip_result_check,
+            "native_realtime_enabled": native_report is not None,
+        },
+    )
+    if native_report is not None:
+        selection = SimpleNamespace(
+            path=Path("chart-728-easy.json"),
+            timeline=None,
+            bestdori_song_id=728,
+            difficulty="easy",
+        )
+        monkeypatch.setattr(
+            profile_play_action,
+            "resolve_local_chart_for_run",
+            lambda *args, **kwargs: SimpleNamespace(
+                selection=selection, reason="matched",
+            ),
+        )
+        monkeypatch.setattr(
+            profile_play_action,
+            "consume_prearmed_backend",
+            lambda *_args: SimpleNamespace(configure_timing_offset=lambda _: None),
+        )
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action._recover_completed_result",
+        lambda context: True,
     )
     monkeypatch.setattr(
         "agent.realtime.profile_play_action.require_game_foreground",
@@ -1637,7 +1764,16 @@ def _completed_play_harness(
                 120,
                 42,
                 engine_stopped,
-                completed=not engine_stopped and not startup_timed_out,
+                completed=(
+                    not engine_stopped and not startup_timed_out
+                    and not life_failed and not aborted_for_life
+                ),
+                life_failed=life_failed,
+                aborted_for_life=aborted_for_life,
+                life_depleted=life_failed or aborted_for_life,
+                cleanup_failed=engine_cleanup_failed,
+                engine_mode="native" if native_report is not None else "legacy",
+                native_report=dict(native_report or {}),
                 action_counts={"tap": 31, "flick": 4, "down": 7},
                 frame_interval_p50_ms=16.4,
                 frame_interval_p95_ms=18.2,
@@ -1648,6 +1784,8 @@ def _completed_play_harness(
                     if engine_stopped
                     else "开演后 20 秒仍未识别到生命条"
                     if startup_timed_out
+                    else "演出失败：生命值归零"
+                    if life_failed or aborted_for_life
                     else "已识别演奏结束并进入结算"
                 ),
                 initial_timing_offset_ms=-11,
@@ -1660,6 +1798,7 @@ def _completed_play_harness(
     image = np.full((720, 1280, 3), 128, dtype=np.uint8)
 
     def fake_collect(*args, **kwargs):
+        assert not (life_failed or aborted_for_life), "死亡局不能采集成功结算"
         assert kwargs["cooperative_mode"] is (run_mode == "cooperative")
         assert kwargs["robust_navigation"] is True
         assert kwargs["timeout_seconds"] == 180.0
@@ -1668,6 +1807,7 @@ def _completed_play_harness(
         return ResultCollectionOutcome(
             collection_status,
             result=(
+                collected_result if collected_result is not None else
                 LiveResult(100, 10, 2, 1, 2, 3, 4)
                 if collection_status is ResultCollectionStatus.STABLE else None
             ),
@@ -1708,13 +1848,186 @@ def _completed_play_harness(
     }
     if calibration_report:
         params["calibration_report"] = "screencap/calibration-round.json"
+    if native_report is not None:
+        params["rehearsal_mode"] = False
+    if defer_result_collection:
+        params.update({
+            "defer_result_collection": True,
+            "deferred_result_report": "screencap/medley-session-song1.json",
+        })
     argv = SimpleNamespace(custom_action_param=json.dumps(params))
-    if collection_exception is not None:
-        with pytest.raises(type(collection_exception), match=str(collection_exception)):
-            RealtimeProfilePlay()._run(context, argv)
-    else:
-        assert RealtimeProfilePlay()._run(context, argv) is expected_success
+    assert RealtimeProfilePlay()._run(context, argv) is expected_success
     return tmp_path, writes, recorder_holder.get("value")
+
+
+def _life_failed_native_report():
+    return {
+        "planned": 6287,
+        "sent": 2218,
+        "executed": 2195,
+        "underflows": 0,
+        "state": "cancelled",
+        "session_state": "cancelled",
+        "executed_observation_complete": False,
+        "executed_observation_reason": "会话在完整设备回读前取消",
+        "reset_executed": True,
+        "release_confirmed": True,
+        "stop_latency_ms": 21.0,
+    }
+
+
+@pytest.mark.parametrize("death_source", ["popup", "numeric"])
+@pytest.mark.parametrize("run_mode", ["challenge", "medley"])
+def test_native_life_failure_keeps_reason_and_exits_failed_live(
+    tmp_path, monkeypatch, death_source, run_mode,
+):
+    from agent.task_reporting import record_failure_reason, latest_failure_reason
+
+    record_failure_reason("")
+    exits = []
+    monkeypatch.setattr(
+        profile_play_action, "exit_failed_live", lambda context: exits.append(context) or True,
+    )
+    root, writes, _ = _completed_play_harness(
+        monkeypatch, tmp_path,
+        debug_recording=False,
+        diagnostic_trace=False,
+        run_mode=run_mode,
+        life_failed=death_source == "popup",
+        aborted_for_life=death_source == "numeric",
+        native_report=_life_failed_native_report(),
+        expected_success=False,
+    )
+    report = next((root / "screencap").glob("realtime-result-*.json"))
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["result_status"] == "life_failed"
+    assert payload["reason"] == "演出失败：生命值归零"
+    assert payload["completed"] is False
+    assert latest_failure_reason() == "演出失败：生命值归零"
+    assert len(exits) == (0 if run_mode == "medley" else 1)
+    assert writes == []
+
+
+@pytest.mark.parametrize("override", [
+    {"release_confirmed": False},
+    {"reset_executed": False},
+    {"executed": 2219},
+    {"underflows": 1},
+    {"device_error": "connection lost"},
+    {"stop_latency_ms": 1001.0},
+])
+def test_native_life_failure_does_not_hide_unsafe_cleanup(tmp_path, monkeypatch, override):
+    exits = []
+    monkeypatch.setattr(
+        profile_play_action, "exit_failed_live", lambda context: exits.append(context) or True,
+    )
+    with pytest.raises(RuntimeError, match="Native 演奏未通过完整性门禁"):
+        _completed_play_harness(
+            monkeypatch, tmp_path,
+            debug_recording=False,
+            diagnostic_trace=False,
+            run_mode="challenge",
+            life_failed=True,
+            native_report=_life_failed_native_report() | override,
+            expected_success=False,
+        )
+    assert exits == []
+
+
+def test_native_life_failure_keeps_engine_cleanup_failure_blocking(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        profile_play_action, "exit_failed_live",
+        lambda context: pytest.fail("触点清理失败时不能继续导航"),
+    )
+    with pytest.raises(RuntimeError, match="Native 演奏未通过完整性门禁"):
+        _completed_play_harness(
+            monkeypatch, tmp_path,
+            debug_recording=False,
+            diagnostic_trace=False,
+            run_mode="challenge",
+            life_failed=True,
+            engine_cleanup_failed=True,
+            native_report=_life_failed_native_report(),
+            expected_success=False,
+        )
+
+
+def test_completed_medley_play_defers_pggbm_collection(tmp_path, monkeypatch):
+    root, writes, _ = _completed_play_harness(
+        monkeypatch,
+        tmp_path,
+        debug_recording=False,
+        run_mode="medley",
+        defer_result_collection=True,
+    )
+
+    report = root / "screencap" / "medley-session-song1.json"
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["result_status"] == "medley_result_pending"
+    assert payload["valid"] is False
+    assert payload["completed"] is True
+    assert writes == []
+
+
+def test_finalize_deferred_result_marks_report_stable(tmp_path, monkeypatch):
+    monkeypatch.setattr(profile_play_action, "PROJECT_ROOT", tmp_path)
+    report = tmp_path / "screencap" / "medley-session-song1.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(json.dumps({
+        "result_status": "medley_result_pending",
+        "valid": False,
+        "eligible_for_profile_acceptance": False,
+        "reason": "组曲判定详情将在第三曲后逐首读取",
+        "current_timing_offset_ms": 8,
+        "initial_timing_offset_ms": 5,
+        "engine_mode": "native",
+        "profile": "expert.json",
+    }), encoding="utf-8")
+
+    payload = finalize_deferred_result(
+        "screencap/medley-session-song1.json",
+        LiveResult(100, 2, 1, 0, 0, 3, 4),
+        save_screenshot=False,
+    )
+
+    assert payload["result_status"] == "stable"
+    assert payload["valid"] is True
+    assert payload["eligible_for_profile_acceptance"] is True
+    assert payload["suggested_timing_offset_ms"] == 8
+    assert payload["perfect"] == 100
+    assert "reason" not in payload
+
+    repeated = finalize_deferred_result(
+        "screencap/medley-session-song1.json",
+        LiveResult(100, 2, 1, 0, 0, 3, 4),
+        save_screenshot=False,
+    )
+    assert repeated == payload
+
+
+def test_finalize_deferred_result_rejects_wrong_state_and_external_path(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(profile_play_action, "PROJECT_ROOT", tmp_path)
+    report = tmp_path / "screencap" / "not-pending.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(
+        json.dumps({"result_status": "failed"}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="状态不正确"):
+        finalize_deferred_result(
+            report,
+            LiveResult(1, 0, 0, 0, 0, 0, 0),
+            save_screenshot=False,
+        )
+    with pytest.raises(ValueError, match="screencap"):
+        finalize_deferred_result(
+            tmp_path / "outside.json",
+            LiveResult(1, 0, 0, 0, 0, 0, 0),
+            save_screenshot=False,
+        )
 
 
 def test_completed_without_video_writes_json_and_trace_only(tmp_path, monkeypatch):
@@ -1740,7 +2053,7 @@ def test_completed_without_video_writes_json_and_trace_only(tmp_path, monkeypatc
     assert summary["recording_mode"] == "trace-only"
 
 
-def test_completed_cooperative_play_advances_score_page_without_pggbm_parse(
+def test_completed_cooperative_play_advances_when_judgements_are_unreadable(
     tmp_path, monkeypatch,
 ):
     root, writes, _ = _completed_play_harness(
@@ -1755,6 +2068,22 @@ def test_completed_cooperative_play_advances_score_page_without_pggbm_parse(
     payload = json.loads(report.read_text(encoding="utf-8"))
     assert payload["result_status"] == "cooperative_result_advanced"
     assert payload["valid"] is False
+    assert payload["cooperative_judgements_status"] == "unreadable"
+    assert writes == []
+
+
+def test_completed_cooperative_play_saves_stable_judgements(tmp_path, monkeypatch):
+    reading = LiveResult(100, 10, 2, 1, 2, 3, 4)
+    root, writes, _ = _completed_play_harness(
+        monkeypatch, tmp_path, debug_recording=False,
+        collection_status=ResultCollectionStatus.ADVANCED,
+        run_mode="cooperative", collected_result=reading,
+    )
+    payload = json.loads(next((root / "screencap").glob("realtime-result-*.json")).read_text(encoding="utf-8"))
+    assert payload["cooperative_judgements_status"] == "stable"
+    for name, value in reading.to_dict().items():
+        assert payload[name] == value
+    assert payload["eligible_for_profile_acceptance"] is False
     assert writes == []
 
 
@@ -1791,6 +2120,22 @@ def test_direct_profile_play_does_not_reuse_unprepared_song_identity(
     assert payload["song_id_method"] == "unknown"
 
 
+def test_continuous_play_preserves_preconfirmed_opening_identity(
+    tmp_path, monkeypatch,
+):
+    root, _, _ = _completed_play_harness(
+        monkeypatch,
+        tmp_path,
+        debug_recording=False,
+        run_mode="continuous",
+    )
+
+    report = next((root / "screencap").glob("realtime-result-*.json"))
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["mode"] == "continuous"
+    assert payload["song_id"] == "song-phash-v1-0123456789abcdef"
+
+
 def test_completed_with_debug_recording_writes_json_and_screenshot(
     tmp_path, monkeypatch,
 ):
@@ -1817,7 +2162,7 @@ def test_result_collection_timeout_writes_invalid_correlated_json(
         tmp_path,
         debug_recording=False,
         collection_status=ResultCollectionStatus.TIMED_OUT,
-        expected_success=False,
+        expected_success=True,
     )
 
     reports = list((root / "screencap").glob("realtime-result-*.json"))
@@ -1896,6 +2241,57 @@ def test_result_collection_exception_writes_invalid_correlated_json(
     assert payload["reason"] == "结算读取异常: RuntimeError: capture failed"
     assert payload["processed_frames"] == 120
     assert payload["run_id"] == payload["session"]["run_id"]
+
+
+@pytest.mark.parametrize("run_mode", ["formal", "cooperative", "challenge", "continuous", "calibration-formal"])
+def test_completed_modes_continue_after_result_exception(tmp_path, monkeypatch, run_mode):
+    _completed_play_harness(
+        monkeypatch, tmp_path, debug_recording=False,
+        run_mode=run_mode, collection_exception=RuntimeError("result OCR failed"),
+    )
+
+
+@pytest.mark.parametrize("status", [ResultCollectionStatus.TIMED_OUT, ResultCollectionStatus.BLOCKED])
+def test_completed_modes_continue_after_unreadable_result(tmp_path, monkeypatch, status):
+    _completed_play_harness(
+        monkeypatch, tmp_path, debug_recording=False, collection_status=status,
+    )
+
+
+def test_skip_result_check_never_calls_numeric_collection(tmp_path, monkeypatch):
+    root, writes, _ = _completed_play_harness(
+        monkeypatch, tmp_path, debug_recording=False, skip_result_check=True,
+        collection_exception=AssertionError("must not collect result"),
+    )
+    assert writes == []
+    assert not list((root / "screencap").glob("realtime-result-*.json"))
+
+
+def test_skip_result_check_keeps_calibration_evidence(tmp_path, monkeypatch):
+    root, _, _ = _completed_play_harness(
+        monkeypatch, tmp_path, debug_recording=False, skip_result_check=True,
+        calibration_report=True, run_mode="calibration-formal",
+    )
+    payload = json.loads((root / "screencap/calibration-round.json").read_text(encoding="utf-8"))
+    assert payload["valid"] is True
+
+
+def test_completed_report_write_failure_is_nonfatal(tmp_path, monkeypatch):
+    def fail_write(*_args, **_kwargs):
+        raise OSError("result disk unavailable")
+    monkeypatch.setattr("agent.realtime.profile_play_action._write_json_atomic", fail_write)
+    _completed_play_harness(monkeypatch, tmp_path, debug_recording=False)
+
+
+def test_skip_result_check_does_not_hide_life_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr("agent.realtime.profile_play_action.exit_failed_live", lambda context: True)
+    root, _, _ = _completed_play_harness(
+        monkeypatch, tmp_path, debug_recording=False, skip_result_check=True,
+        life_failed=True, expected_success=False,
+    )
+    payload = json.loads(next((root / "screencap").glob("realtime-result-*.json")).read_text(encoding="utf-8"))
+    assert payload["result_status"] == "life_failed"
+    assert payload["completed"] is False
 
 
 def test_debug_screenshot_failure_keeps_stable_json_result(
@@ -1982,17 +2378,21 @@ def test_one_run_links_result_calibration_and_recorder_summary(
     assert result["song_id"] == summary["session"]["song_id"]
 
 
-def test_dismiss_reward_popup_clicks_matched_button():
+def test_dismiss_reward_popup_uses_safe_click_back_safe_click_cycle():
     template = cv2.imread(str(profile_play_action.REWARD_OK_TEMPLATE))
     assert template is not None
     image = np.zeros((720, 1280, 3), dtype=np.uint8)
     image[568:642, 562:716] = template
-    clicks = []
+    actions = []
     foreground_checks = []
 
     class FakeController:
         def post_click(self, x, y):
-            clicks.append((x, y))
+            actions.append(("click", (x, y)))
+            return SimpleNamespace(wait=lambda: None)
+
+        def post_click_key(self, key):
+            actions.append(("key", key))
             return SimpleNamespace(wait=lambda: None)
 
     assert _dismiss_reward_popup(
@@ -2001,8 +2401,12 @@ def test_dismiss_reward_popup_clicks_matched_button():
         before_input=lambda: foreground_checks.append(1),
         threshold=0.8,
     ) is True
-    assert clicks == [(639, 605)]
-    assert foreground_checks == [1]
+    assert actions == [
+        ("click", profile_play_action.RESULT_ANIMATION_SKIP_POINT),
+        ("key", 4),
+        ("click", profile_play_action.RESULT_ANIMATION_SKIP_POINT),
+    ]
+    assert foreground_checks == [1, 1, 1]
 
 
 def test_dismiss_reward_popup_ignores_clean_result_screen():
@@ -2079,5 +2483,5 @@ def test_collect_result_dismisses_reward_popup_before_stabilizing():
 
     assert outcome.status is ResultCollectionStatus.STABLE
     assert outcome.result is not None
-    assert clicks == []
+    assert clicks == [profile_play_action.RESULT_ANIMATION_SKIP_POINT] * 4
     assert keys == [4, 4]

@@ -32,7 +32,6 @@ def test_foreground_query_falls_back_to_bound_adb_when_agent_shell_is_unsupporte
         "shell",
         "dumpsys",
         "window",
-        "windows",
     ]
     assert calls[0][1]["timeout"] == 5
 
@@ -42,7 +41,7 @@ def test_foreground_query_retries_when_mumu_window_windows_has_no_focus_marker(m
 
     def run(command, **kwargs):
         calls.append((command, kwargs))
-        if command[-2:] == ["window", "windows"]:
+        if command[-3:] == ["shell", "dumpsys", "window"]:
             return SimpleNamespace(
                 stdout=(
                     "Window #0 Window{123 u0 ScreenDecorOverlay}:\n"
@@ -64,6 +63,6 @@ def test_foreground_query_retries_when_mumu_window_windows_has_no_focus_marker(m
         == foreground_guard.GAME_PACKAGE
     )
     assert [call[0][-3:] for call in calls] == [
-        ["dumpsys", "window", "windows"],
         ["shell", "dumpsys", "window"],
+        ["dumpsys", "window", "windows"],
     ]

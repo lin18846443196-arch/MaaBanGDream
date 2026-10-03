@@ -19,7 +19,7 @@ def test_release_launcher_extracts_only_package_local_runtime():
     assert "$runtimeDirectory = Join-Path $packageRoot 'runtime'" in launcher
     assert "Join-Path $runtimeDirectory 'maabangdream-python.zip'" in launcher
     assert "Join-Path $runtimeDirectory 'python'" in launcher
-    assert "Expand-Archive" in launcher
+    assert "[IO.Compression.ZipFileExtensions]::ExtractToFile" in launcher
     assert "conda-unpack.exe" in launcher
     assert "check_runtime.py" in launcher
     assert "--portable --mfa-root $packageRoot" in launcher
@@ -103,6 +103,9 @@ def test_release_builder_uses_clean_sources_and_excludes_private_state():
     assert "status --porcelain" in builder
     assert "[switch]$AllowDirty" in builder
     assert "PerformanceProfileSettingsUserControl" in builder
+    assert "-p:MaaBanGDreamPackageBuild=true" in builder
+    assert '"YesBanGDream.exe"' in validator
+    assert '"YesBanGDream.deps.json"' in validator
     assert "SupportsSelectedResourceUpdateSource" in builder
     assert "build_native_realtime.ps1" in builder
     assert "create_release_zip.py" in builder
@@ -110,6 +113,17 @@ def test_release_builder_uses_clean_sources_and_excludes_private_state():
     assert '"docs\\release-notes-v$Version.md"' in builder
     assert "resource\\Release.md" in builder
     assert '"resource/Release.md"' in validator
+    for notice in (
+        "LICENSING-MaaBanGDream.md",
+        "TRADEMARKS-MaaBanGDream.md",
+        "THIRD-PARTY-NOTICES.md",
+        "LICENSE-MaaFramework-LGPL-3.0.md",
+    ):
+        assert notice in builder
+        assert notice in validator
+    assert "PolyForm Noncommercial License 1.0.0" in validator
+    assert "Required Notice:" in validator
+    assert "GNU Lesser General Public License" in validator
     assert "tar.exe -a -c" not in builder
     assert r"agent\realtime\native\maabangdream_realtime.pyd" in builder
     assert "maabangdream_realtime.pyd" in validator
@@ -147,12 +161,27 @@ def test_release_readme_documents_sources_and_first_run():
     release_readme = read("docs/release-package.md")
     project_readme = read("README.md")
 
-    assert "启动 MaaBanGDream.cmd" in release_readme
+    assert "启动 YesBanGDream.cmd" in release_readme
     assert "coatcn1/MFAAvalonia" in release_readme
     assert "BUILD-INFO.json" in release_readme
     assert "Releases" in project_readme
-    assert "fix/native-realtime-ui-toggle" in project_readme
+    assert "fix/speed-only-settings" in project_readme
     assert "resource/Release.md" in release_readme
+
+
+def test_branded_host_launch_and_upgrade_cleanup():
+    launcher = read("scripts/start-release.ps1")
+    patcher = read("scripts/patch-mfa-stop-status.ps1")
+    developer_launcher = read("scripts/launch-mfa.ps1")
+    assert "$mfa = Join-Path $packageRoot 'YesBanGDream.exe'" in launcher
+    assert "-p:MaaBanGDreamPackageBuild=true" in patcher
+    assert "'YesBanGDream.dll'" in patcher
+    assert "'YesBanGDream.runtimeconfig.json'" in patcher
+    assert "'MFAAvalonia.runtimeconfig.json'" in launcher
+    assert "OR Name = 'YesBanGDream.exe'" in developer_launcher
+    assert "'ColorTextBlock.Avalonia.dll'" in patcher
+    assert "$metadata.markdown_sha256" in patcher
+    assert "Copy-Item -LiteralPath $builtMarkdownAssembly -Destination $deployedMarkdownAssembly" in patcher
 
 
 def test_v136_launcher_uses_native_mfa_update_flow():
@@ -163,6 +192,36 @@ def test_v136_launcher_uses_native_mfa_update_flow():
     assert "normalize-release-directory.ps1" in launcher
     assert "update.ps1" not in launcher
     assert "Invoke-WebRequest" not in normalizer
-    assert "MaaBanGDream-v$currentVersion-win-x64" in normalizer
+    assert "YesBanGDream-v$currentVersion-win-x64" in normalizer
     assert "normalize-release-directory.ps1" in builder
     assert "scripts\\update.ps1" not in builder
+
+
+def test_update_restart_avoids_batch_console_and_keeps_portable_preparation():
+    restart = read("scripts/restart-release.ps1")
+    normalizer = read("scripts/normalize-release-directory.ps1")
+    builder = read("scripts/build-windows-release.ps1")
+    assert "normalize-release-directory.ps1" in restart and "-Inline" in restart
+    assert "scripts\\start-release.ps1" in restart
+    assert "updater-launch.log" in restart
+    assert "cmd /c" not in restart.lower()
+    assert "[switch]$Inline" in normalizer
+    assert "-WindowStyle Hidden" in normalizer
+    assert "'scripts\\restart-release.ps1'" in builder
+
+
+def test_independent_announcement_is_packaged_and_configured():
+    interface = json.loads(read("interface.json"))
+    assert interface["welcome"] == "https://raw.githubusercontent.com/woshiyigeanniu/YesBanGDream/main/docs/announcement.md"
+    assert read("docs/announcement.md").startswith("# YesBanGDream")
+    assert "'docs\\announcement.md'" in read("scripts/build-windows-release.ps1")
+
+
+def test_development_document_assets_match_release_version():
+    launcher = read("scripts/launch-mfa.ps1")
+    interface = json.loads(read("interface.json"))
+    assert "'docs/announcement.md'" in launcher
+    assert "docs/release-notes-v{0}.md" in launcher
+    assert "$interface.version.TrimStart('v')" in launcher
+    assert "'resource/Release.md'" in launcher
+    assert read(f"docs/release-notes-v{interface['version'].lstrip('v')}.md")

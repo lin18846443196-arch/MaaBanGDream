@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from agent.realtime import profile_play_action
+from agent.realtime import final_cover
 from agent.realtime.chart_repository import ChartResolution, LocalChartRepository
 from agent.realtime.final_cover import (
     FinalCoverConfirmation,
@@ -154,6 +155,8 @@ def final_cover_frame(seed: int = 7) -> tuple[np.ndarray, str]:
         dtype=np.uint8,
     )
     image[y:y + height, x:x + width] = jacket
+    # 本地版本还要求难度标签与黑色侧栏，不能只凭封面方块确认开场页。
+    image[421:449, 600:690] = (255, 0, 255)
     return image, fingerprint_jacket(jacket).song_id
 
 
@@ -192,6 +195,93 @@ def selection(song_id: str):
         fingerprints=(song_id,),
         shared_jacket=True,
     )
+
+
+def loading_frame(position=(20, 600)):
+    image, song_id = final_cover_frame()
+    template = final_cover.member_loading_icon()
+    x, y = position
+    image[y:y + template.shape[0], x:x + template.shape[1]] = template
+    return image, song_id
+
+
+@pytest.mark.parametrize("position", [(20, 600), (20, 280)])
+def test_member_loading_icon_is_found_after_panel_moves(position):
+    image, _ = loading_frame(position)
+    assert final_cover.is_member_loading_screen(image)
+    assert not final_cover.is_member_loading_screen(final_cover_frame()[0])
+
+
+def test_loading_guard_is_off_by_default_and_missing_template_fails_closed(monkeypatch):
+    monkeypatch.delenv("MAABANGDREAM_COOPERATIVE_MEMBER_LOADING_GUARD_TRIAL", raising=False)
+    assert not final_cover.cooperative_member_loading_guard_enabled()
+    monkeypatch.setenv("MAABANGDREAM_COOPERATIVE_MEMBER_LOADING_GUARD_TRIAL", "1")
+    assert final_cover.cooperative_member_loading_guard_enabled()
+    final_cover.member_loading_icon.cache_clear()
+    monkeypatch.setattr(final_cover, "imread_unicode", lambda *args: None)
+    cover, song_id = final_cover_frame()
+    resolver = FinalCoverResolver(
+        difficulty="Expert", observed_level=28, observed_title="SAVIOR OF SONG",
+        selection=selection(song_id),
+    )
+    assert resolver.observe(cover) is not None
+    with pytest.raises(RuntimeError, match="模板缺失或损坏"):
+        FinalCoverResolver(
+            difficulty="Expert", observed_level=28, observed_title="SAVIOR OF SONG",
+            selection=selection(song_id), reject_member_loading=True,
+        )
+
+
+def test_loading_guard_rejects_even_a_matching_selected_jacket():
+    loading, song_id = loading_frame()
+    resolver = FinalCoverResolver(
+        difficulty="Expert", observed_level=28, observed_title="SAVIOR OF SONG",
+        selection=selection(song_id), reject_member_loading=True,
+    )
+    assert resolver.observe(loading) is None
+    assert resolver.last_reason == "member loading screen"
+    assert resolver.observe(final_cover_frame()[0]) is not None
+
+
+def test_loading_frame_interrupts_continuous_deferred_cover_candidate():
+    loading, song_id = loading_frame()
+    selected = selection(song_id)
+
+    class Repository:
+        def resolve(self, *args, **kwargs):
+            return ChartResolution(selected, "confirmed")
+
+    resolver = FinalCoverResolver(
+        difficulty="Expert", observed_level=28, observed_title="SAVIOR OF SONG",
+        repository=Repository(), reject_member_loading=True,
+    )
+    cover = final_cover_frame()[0]
+    assert resolver.observe(cover) is None
+    assert resolver.observe(loading) is None
+    assert resolver.observe(cover) is None
+    assert resolver.observe(cover) is not None
+
+
+@pytest.mark.parametrize("mode", ["cooperative", "formal"])
+def test_normal_final_cover_wait_applies_loading_guard_only_to_cooperative(monkeypatch, mode):
+    monkeypatch.setenv("MAABANGDREAM_COOPERATIVE_MEMBER_LOADING_GUARD_TRIAL", "1")
+    loading, song_id = loading_frame()
+    images = iter([loading, final_cover_frame()[0]])
+    captured = []
+
+    class Controller:
+        def post_screencap(self):
+            image = next(images)
+            captured.append(image)
+            return SimpleNamespace(wait=lambda: SimpleNamespace(get=lambda: image))
+
+    outcome = wait_for_final_cover(
+        Controller(), SimpleNamespace(mode=mode, song_level=28, song_title="SAVIOR OF SONG"),
+        selection(song_id), "Expert", lambda: False,
+        timeout_seconds=1, poll_interval_seconds=0,
+    )
+    assert outcome.status == "confirmed"
+    assert len(captured) == (2 if mode == "cooperative" else 1)
 
 
 def test_final_cover_confirms_only_with_preparation_title_level_and_difficulty():
@@ -476,6 +566,171 @@ def test_refresh_observed_title_only_upgrades_validated_confidence(tmp_path):
     assert resolver.observed_title == "FIRE BIRD"
 
 
+def test_final_cover_resolver_can_require_title_after_early_ocr_failed():
+    cover, song_id = final_cover_frame()
+    selection = SimpleNamespace(
+        difficulty="expert",
+        level=28,
+        shared_jacket=False,
+        fingerprints=(song_id,),
+        bestdori_song_id=50,
+        title="FIRE BIRD",
+        titles=("FIRE BIRD",),
+    )
+
+    class Repository:
+        def resolve(self, _song_id, _difficulty, *, level, title):
+            assert level == 28
+            return ChartResolution(
+                selection if title == "FIRE BIRD" else None,
+                "confirmed" if title == "FIRE BIRD" else "title missing",
+            )
+
+    resolver = FinalCoverResolver(
+        difficulty="Expert",
+        observed_level=28,
+        observed_title="FIRE BIRD",
+        observed_title_confidence=0.0,
+        repository=Repository(),
+        require_observed_title=True,
+    )
+
+    assert resolver.observed_title is None
+    assert resolver.observe(cover) is None
+    assert resolver.observe(cover) is None
+    assert resolver.last_reason == "final cover title is not confirmed"
+    assert resolver.refresh_observed_title("FIRE BIRD", 0.93) is True
+    resolution = resolver.observe(cover)
+    assert resolution is not None
+    assert resolution.confirmation.bestdori_song_id == 50
+
+
+def test_final_cover_resolver_can_reconfirm_pending_identity_without_old_level():
+    cover, song_id = final_cover_frame()
+    selected = SimpleNamespace(
+        difficulty="expert",
+        level=28,
+        shared_jacket=False,
+        fingerprints=(song_id,),
+        bestdori_song_id=50,
+        title="FIRE BIRD",
+        titles=("FIRE BIRD",),
+    )
+
+    class Repository:
+        def resolve(self, _song_id, _difficulty, *, level, title):
+            assert level is None
+            return ChartResolution(
+                selected if title == "FIRE BIRD" else None,
+                "confirmed" if title == "FIRE BIRD" else "title missing",
+            )
+
+    resolver = FinalCoverResolver(
+        difficulty="Expert",
+        observed_level=None,
+        observed_title=None,
+        repository=Repository(),
+        require_observed_title=True,
+        allow_missing_level=True,
+    )
+
+    assert resolver.evidence_reason() is None
+    assert resolver.refresh_observed_title("FIRE BIRD", 0.93) is True
+    assert resolver.observe(cover) is None
+    assert resolver.observe(cover) is not None
+
+
+def test_pending_final_cover_does_not_reuse_a_trusted_preparation_title():
+    cover, _song_id = final_cover_frame()
+
+    class Job:
+        def wait(self):
+            return self
+
+        def get(self):
+            return cover
+
+    class Controller:
+        def post_screencap(self):
+            return Job()
+
+    class Repository:
+        def resolve(self, *_args, **_kwargs):
+            raise AssertionError("最终标题缺失时不得复用旧标题解析")
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(
+            profile_play_action, "recognize_song_title", lambda *_args, **_kwargs: None,
+        )
+        monkeypatch.setattr(
+            profile_play_action, "PlayfieldDetector", lambda: (lambda _image: True),
+        )
+        with pytest.raises(RuntimeError, match="最终封面页标题未确认"):
+            wait_for_final_cover(
+                Controller(),
+                SimpleNamespace(
+                    song_level=27,
+                    song_title="旧准备页标题",
+                    song_title_confidence=0.99,
+                ),
+                None,
+                "Expert",
+                lambda: False,
+                repository=Repository(),
+                timeout_seconds=1,
+                poll_interval_seconds=0,
+                require_observed_title=True,
+                ignore_preparation_level=True,
+            )
+
+
+def test_required_final_cover_title_does_not_degrade_at_playfield(monkeypatch):
+    cover, _song_id = final_cover_frame()
+
+    class Job:
+        def wait(self):
+            return self
+
+        def get(self):
+            return cover
+
+    class Controller:
+        def post_screencap(self):
+            return Job()
+
+    class Repository:
+        def resolve(self, *_args, **_kwargs):
+            raise AssertionError("标题缺失时不应解析谱面")
+
+    monkeypatch.setattr(
+        profile_play_action,
+        "recognize_song_title",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        profile_play_action,
+        "PlayfieldDetector",
+        lambda: (lambda _image: True),
+    )
+
+    with pytest.raises(RuntimeError, match="最终封面页标题未确认"):
+        wait_for_final_cover(
+            Controller(),
+            SimpleNamespace(
+                song_level=28,
+                song_title="FIRE BIRD",
+                song_title_confidence=0.0,
+            ),
+            None,
+            "Expert",
+            lambda: False,
+            repository=Repository(),
+            timeout_seconds=1,
+            poll_interval_seconds=0,
+            require_observed_title=True,
+        )
+
+
 def test_wait_for_final_cover_refreshes_title_from_final_page(
     monkeypatch,
     tmp_path,
@@ -566,6 +821,8 @@ def test_wait_for_final_cover_refreshes_title_from_final_page(
 
     assert outcome.status == "confirmed"
     assert outcome.resolution.confirmation.bestdori_song_id == 102
+    assert outcome.resolution.observed_title == "Beta Song"
+    assert outcome.resolution.observed_title_confidence == pytest.approx(0.95)
     assert len(calls) == 1
     assert calls[0] == FINAL_COVER_TITLE_ROI
 

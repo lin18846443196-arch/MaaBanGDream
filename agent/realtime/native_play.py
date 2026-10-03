@@ -10,16 +10,23 @@ import math
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from statistics import median
+from statistics import mean, median
 from typing import Any, Callable
 
+import cv2
 import numpy as np
 
 from . import native_engine
 from .native_minitouch import NativeMinitouchDevice
 from .playfield_monitor import LANE_CENTERS, PlayfieldDetector
+from .first_note_evidence import has_approaching_note_head
 from .prepare_popup import CooperativePreparePopupDetector
-from .runtime_flags import native_timing_compensation_enabled
+from .life_monitor import LifeDetector
+from .multiplayer_mode import is_multiplayer_mode, uses_multiplayer_start_gate
+from .runtime_flags import (
+    native_timing_compensation_enabled,
+    native_wait_jitter_trial_enabled,
+)
 
 
 TOUCH_Y = 590.0
@@ -40,9 +47,9 @@ class NativeStartGatePolicy:
 def resolve_native_start_gate_policy(run_mode: str | None) -> NativeStartGatePolicy:
     """协力已确认生命条出现，因此只需要更短的基线稳定窗口。"""
     normalized = str(run_mode or "realtime").strip().lower()
-    if normalized == "cooperative":
+    if is_multiplayer_mode(normalized):
         return NativeStartGatePolicy(
-            mode="cooperative-playfield-confirmed",
+            mode=f"{normalized}-playfield-confirmed",
             stable_duration_ms=120.0,
             grace_ms=500.0,
         )
@@ -114,6 +121,57 @@ class _ExecutionTimingTrace:
             "sample_count": len(samples),
             "samples": samples,
             "chunks": chunks,
+        }
+
+
+class _WaitCostEstimator:
+    """只预测未来等待的常态成本，真实卡顿欠账仍由原始校准器计入。"""
+
+    def __init__(self) -> None:
+        self._samples: deque[float] = deque(maxlen=64)
+        self._estimated_ms = 0.0
+        self._clipped_count = 0
+        self._raw_chunk_wait_ms: float | None = None
+
+    def observe(self, event: dict[str, object]) -> None:
+        command = str(event["command"])
+        if command.startswith("w "):
+            self._samples.append(
+                float(event["cost_ms"]) - float(command.split()[1])
+            )
+
+    def estimate(
+        self, fallback: float, *, raw_chunk_wait_ms: float | None = None,
+    ) -> float:
+        self._raw_chunk_wait_ms = raw_chunk_wait_ms
+        self._clipped_count = 0
+        if len(self._samples) < 8:
+            self._estimated_ms = float(fallback)
+            return self._estimated_ms
+        samples = list(self._samples)
+        center = median(samples)
+        # 稀疏块的一次调度卡顿不能变成密集块每条 w 的成本。保留有界的
+        # 常态波动；持续变慢会更新整个窗口，而不是被永久当作异常丢弃。
+        spread = max(1.0, 6.0 * median(abs(value - center) for value in samples))
+        bounded = [min(center + spread, max(center - spread, value)) for value in samples]
+        self._clipped_count = sum(raw != clipped for raw, clipped in zip(samples, bounded))
+        self._estimated_ms = mean(bounded)
+        return self._estimated_ms
+
+    def reset(self) -> None:
+        self._samples.clear()
+        self._estimated_ms = 0.0
+        self._clipped_count = 0
+        self._raw_chunk_wait_ms = None
+
+    def report(self) -> dict[str, object]:
+        return {
+            "sample_count": len(self._samples),
+            "window_samples": 64,
+            "minimum_samples": 8,
+            "estimated_wait_ms": self._estimated_ms,
+            "raw_chunk_wait_ms": self._raw_chunk_wait_ms,
+            "clipped_sample_count": self._clipped_count,
         }
 
 
@@ -242,13 +300,13 @@ class NativeStartPhotogate:
         # 会让整行颜色发生大变化，被首拍门控误判成第一颗音符。默认仅对
         # 协力策略启用弹窗门控，单人/校准/挑战保持原有行为。
         if suppress_prepare_popup is None:
-            suppress_prepare_popup = str(mode).startswith("cooperative")
+            suppress_prepare_popup = uses_multiplayer_start_gate(mode)
         self._popup_gate_enabled = bool(suppress_prepare_popup)
         self._popup_detector = (
             popup_detector
             if popup_detector is not None
             else (
-                CooperativePreparePopupDetector()
+                CooperativePreparePopupDetector(verify_content=True)
                 if self._popup_gate_enabled
                 else None
             )
@@ -261,6 +319,7 @@ class NativeStartPhotogate:
         self._observed_since_s: float | None = None
         self.stable_since_s: float | None = None
         self.frozen_at_s: float | None = None
+        self._grace_until_s: float | None = None
         self.waited_frames = 0
         self.frozen = False
         self.triggered = False
@@ -276,7 +335,20 @@ class NativeStartPhotogate:
         self._prepare_popup_active = False
         self.prepare_popup_frames = 0
         self.prepare_popup_blocked_events = 0
-        self._significant_events: deque[dict[str, object]] = deque(maxlen=32)
+        self._significant_events: deque[dict[str, object]] = deque(maxlen=128)
+        self._startup_life = LifeDetector() if uses_multiplayer_start_gate(self.mode) else None
+        self._next_startup_life_check = float('-inf')
+        self._startup_life_peak = None
+        self._startup_life_drop_streak = 0
+        self.startup_life_value = None
+        self.startup_rejected_reason = None
+
+    def _has_approaching_note_head(self, image: Any) -> bool:
+        """Use the shared rim guard without changing photogate thresholds."""
+        return has_approaching_note_head(
+            image, from_row=self._from_row, to_row=self._to_row,
+            reference_height=self._reference_height,
+        )
 
     def _reset_band_state(self) -> None:
         """演奏场尚未成立或短暂消失时，丢弃此前加载页颜色基线。"""
@@ -286,6 +358,7 @@ class NativeStartPhotogate:
         self._previous_frame_s = None
         self.stable_since_s = None
         self.frozen_at_s = None
+        self._grace_until_s = None
         self.waited_frames = 0
         self.frozen = False
 
@@ -347,12 +420,17 @@ class NativeStartPhotogate:
                 self.prepare_popup_blocked_events
             ),
             "photogate_events": list(self._significant_events),
+            "photogate_popup_active": self._prepare_popup_active,
+            "photogate_startup_life": self.startup_life_value,
+            "photogate_startup_rejected_reason": self.startup_rejected_reason,
         }
 
     def observe(self, image: Any, now: float) -> float | None:
         """返回第一颗音符的绝对执行时刻；未触发时返回 ``None``。"""
         if self.triggered:
             return None
+        if self.startup_rejected_reason:
+            raise RuntimeError(self.startup_rejected_reason)
         if getattr(image, "ndim", 0) != 3 or image.shape[2] < 3:
             raise ValueError("photogate 需要 HxWx3 图像")
         height = int(image.shape[0])
@@ -385,6 +463,23 @@ class NativeStartPhotogate:
             self.playfield_seen_at_s = frame_s
             self._reset_band_state()
             self._record_event("playfield-visible", frame_s, 0.0)
+        # Missing the first notes must never re-anchor chart time on a later
+        # note. Before any input, a sustained life drop proves play has begun.
+        # Sample at 10 Hz; tolerate a single flash or a partially drawn bar.
+        if self._startup_life is not None and frame_s >= self._next_startup_life_check:
+            self._next_startup_life_check = frame_s + .1
+            reading = self._startup_life.detect(image)
+            if reading.visible:
+                self.startup_life_value = reading.value
+                self._startup_life_peak = max(self._startup_life_peak or 0, reading.value)
+                drop = self._startup_life_peak - reading.value
+                self._startup_life_drop_streak = self._startup_life_drop_streak + 1 if drop >= 50 else 0
+                if self._startup_life_drop_streak >= 3:
+                    self.startup_rejected_reason = 'Native 首拍未确认前已持续掉血，拒绝从歌曲中段启动'
+                    self._record_event('startup-life-drop-rejected', frame_s, float(drop))
+                    raise RuntimeError(self.startup_rejected_reason)
+            else:
+                self._startup_life_drop_streak = 0
         if self._popup_gate_enabled:
             # 弹窗存在时不允许建立颜色基线，也不允许首拍触发；弹窗消失
             # 的那一帧同样只重置基线，避免把弹窗淡出当成第一颗音符。
@@ -430,6 +525,8 @@ class NativeStartPhotogate:
                 if frame_s - self.stable_since_s >= self._stable_duration_s:
                     self.frozen = True
                     self.frozen_at_s = frame_s
+                    if self._grace_until_s is None:
+                        self._grace_until_s = frame_s + self._grace_s
                     self._frozen_columns = image[
                         from_row : to_row + 1, :, :3
                     ].astype("float64").mean(axis=0)
@@ -445,7 +542,8 @@ class NativeStartPhotogate:
             return None
 
         assert self.frozen_at_s is not None
-        if frame_s - self.frozen_at_s < self._grace_s:
+        assert self._grace_until_s is not None
+        if frame_s < self._grace_until_s:
             if change_score >= self._change_threshold:
                 self.ignored_prelude_events += 1
                 self._record_event("ignored-prelude", frame_s, change_score)
@@ -477,7 +575,17 @@ class NativeStartPhotogate:
                     frame_s,
                     change_score,
                 )
-                self._reset_band_state()
+                if self.mode == "cooperative-playfield-confirmed":
+                    # Dense openings may never provide another 120 ms of
+                    # stillness after stage lights change. Rebase and skip
+                    # this frame while retaining the proven start state.
+                    # The next candidate still needs a real note rim.
+                    self._last_color = current
+                    self._frozen_columns = current_columns
+                    self._previous_change = None
+                    self._previous_frame_s = frame_s
+                else:
+                    self._reset_band_state()
                 return None
 
         trigger_s: float | None = None
@@ -499,6 +607,12 @@ class NativeStartPhotogate:
             trigger_s = frame_s
             trigger_source = "direct-threshold"
 
+        if trigger_s is not None and self.mode == "cooperative-playfield-confirmed":
+            if not self._has_approaching_note_head(image):
+                self._record_event("note-head-missing", frame_s, change_score)
+                self._previous_change = None
+                self._previous_frame_s = frame_s
+                return None
         if trigger_s is not None:
             self.triggered = True
             self.triggered_at_s = frame_s
@@ -541,6 +655,7 @@ class NativeMinitouchBackend:
         require_probe: bool | None = None,
         drift_rate_correction_enabled: bool = False,
         timing_trial_enabled: bool | None = None,
+        wait_jitter_trial_enabled: bool | None = None,
     ) -> None:
         if not native_engine.available():
             raise RuntimeError(
@@ -548,6 +663,7 @@ class NativeMinitouchBackend:
                 f"{native_engine.unavailable_reason() or 'unknown'}"
             )
         self._timeline = native_engine.compile_chart(chart_path)
+        self._chart_path = Path(chart_path)
         self._actions: list[dict[str, object]] = list(
             self._timeline.compile_actions({})
         )
@@ -587,6 +703,14 @@ class NativeMinitouchBackend:
         if self._receipt_reader is None:
             raise RuntimeError("Native 模块缺少动作执行回执接口")
         self._calibrator = native_engine.latency_calibrator()
+        self._wait_cost_estimator = (
+            _WaitCostEstimator()
+            if (
+                native_wait_jitter_trial_enabled()
+                if wait_jitter_trial_enabled is None
+                else bool(wait_jitter_trial_enabled)
+            ) else None
+        )
         self._run_id = run_id or str(uuid.uuid4())
         self._jlog_path = Path(jlog_path) if jlog_path is not None else None
         # 速率估计按 chunk 聚合：设备回执成簇到达（同一 commit 的动作共享
@@ -611,6 +735,25 @@ class NativeMinitouchBackend:
             grace_ms=start_policy.grace_ms,
             mode=start_policy.mode,
         )
+        self._start_sync = None
+        self._start_sync_mode = "off"
+        self._start_sync_options: dict[str, object] = {"mode": "off"}
+        self._start_sync_error: str | None = None
+        self._last_start_sample_id: int | None = None
+        self._last_start_sample_s: float | None = None
+        self._startup_sample_count = 0
+        self._startup_new_samples = 0
+        self._startup_reused_samples = 0
+        self._startup_stale_samples = 0
+        self._startup_invalid_samples = 0
+        self._startup_max_age_ms = 0.0
+        self._startup_max_uncertainty_ms = 0.0
+        self._startup_first_sample_s: float | None = None
+        self._startup_last_sample_s: float | None = None
+        self._startup_timing_boundaries: dict[str, object] = {}
+        self._startup_anchor_source: str | None = None
+        self._startup_send_deadline_s: float | None = None
+        self._legacy_anchor_candidate_s: float | None = None
         self._session_factory = session_factory or native_engine.playback_session
         self._session = self._session_factory(
             publish=self._publish_chunk,
@@ -1018,6 +1161,14 @@ class NativeMinitouchBackend:
                     offset_field,
                     float(getattr(expected.used_offsets, offset_field)),
                 )
+        wait_estimator = getattr(self, "_wait_cost_estimator", None)
+        if wait_estimator is not None and int(sample_counts.get("wait", 1)) > 0:
+            offsets.wait_ms = wait_estimator.estimate(
+                float(expected.used_offsets.wait_ms),
+                raw_chunk_wait_ms=float(offsets.wait_ms),
+            )
+        # correction_ms 已用未过滤的实际成本计算：只替换未来预测，不能
+        # 擦掉这次真实卡顿，也不能修改已发布切片或本局 Profile 偏移。
         self._compiler.add_residual_ms(correction_ms)
         self._compiler.set_offsets(offsets)
         self._last_observed_offsets = self._offsets_to_dict(offsets)
@@ -1215,6 +1366,9 @@ class NativeMinitouchBackend:
             self._expected_commands.popleft()
             self._observed_commands += 1
             self._calibrator.observe(event)
+            wait_estimator = getattr(self, "_wait_cost_estimator", None)
+            if wait_estimator is not None:
+                wait_estimator.observe(event)
             observe = getattr(self._session, "observe_minitouch_log", None)
             if observe is not None:
                 observe(event)
@@ -1433,9 +1587,17 @@ class NativeMinitouchBackend:
 
     def observe_start_frame(self, image: Any, now: float) -> float | None:
         """只观察首拍门控；触发时设备未就绪则立即失败。"""
+        if getattr(self, "_start_sync_mode", "off") == "active":
+            raise RuntimeError("Native 首组接管缺少 FrameSample 采集时间，禁止启动")
         anchor = self._photogate.observe(image, now)
         if anchor is None:
             return None
+        self._confirm_start_device_ready()
+        # Old raw-frame integrations preserve the existing timing policy.
+        return (float(anchor) - self._frozen_timing_offset_ms / 1000.0
+                - self._first_read_delay_s)
+
+    def _confirm_start_device_ready(self) -> None:
         if self._device_error is not None:
             self._state = "failed"
             raise RuntimeError(f"minitouch 准备失败：{self._device_error}")
@@ -1449,13 +1611,167 @@ class NativeMinitouchBackend:
             self._emergency_stop_device_with_budget(0.05)
             raise RuntimeError("首拍已到达，但 minitouch 尚未 ready")
         self._state = "ready"
-        # 沿用 Profile 既有语义：正值表示提前输入。该值只在
-        # 首拍映射时折入绝对锚点，本局内不再学习或改写。
-        return (
-            float(anchor)
-            - self._frozen_timing_offset_ms / 1000.0
-            - self._first_read_delay_s
-        )
+
+    def configure_start_sync(self, options) -> None:
+        """Bind chart and rollout policy before any startup observation."""
+        if self._state not in {"idle", "arming", "armed", "ready"} or self._startup_sample_count:
+            raise RuntimeError("Native 首组同步配置只允许在观察首拍前设置")
+        from .chart_timeline import ChartTimeline
+        from .first_group_sync import FirstGroupSynchronizer
+        mode = str(options.mode)
+        if mode not in {"off", "shadow", "active"}:
+            raise ValueError("Native 首组同步模式无效")
+        if mode == "active" and not options.calibration_verified:
+            raise ValueError("Native 首组接管需要已验证的视觉时延校准")
+        self._start_sync_mode = mode
+        self._start_sync_options = options.to_mapping()
+        try:
+            self._start_sync = (
+                FirstGroupSynchronizer(ChartTimeline.from_json(self._chart_path))
+                if mode != "off" else None)
+        except Exception as exc:
+            self._start_sync_error = f"configure: {type(exc).__name__}: {exc}"
+            self._start_sync = None
+            if mode == "active":
+                raise RuntimeError("Native 首组谱面同步配置失败：" + self._start_sync_error) from exc
+
+    def observe_start_sample(self, sample) -> float | None:
+        """New captures alone advance startup; shadow never owns input."""
+        from .frame_sample import FrameSample
+        from .startup_calibration import trajectory_input_target_s
+        self._startup_sample_count += 1
+        if not isinstance(sample, FrameSample) or not sample.valid_metadata:
+            self._startup_invalid_samples += 1
+            self._photogate._reset_band_state()
+            if self._start_sync_mode == "active":
+                raise RuntimeError("Native 首组接管收到无效采集时间，禁止启动")
+            return None
+        self._startup_max_age_ms = max(self._startup_max_age_ms, sample.age_ms)
+        self._startup_max_uncertainty_ms = max(self._startup_max_uncertainty_ms, sample.uncertainty_ms)
+        if not sample.is_new or (self._last_start_sample_id is not None
+                                 and sample.capture_id <= self._last_start_sample_id):
+            self._startup_reused_samples += 1
+            return None
+        self._last_start_sample_id = sample.capture_id
+        self._startup_new_samples += 1
+        sample_s = float(sample.captured_at)
+        if self._startup_first_sample_s is None:
+            self._startup_first_sample_s = sample_s
+        self._startup_last_sample_s = sample_s
+        if not sample.eligible_for_start:
+            self._startup_stale_samples += 1
+            self._photogate._reset_band_state()
+            if self._start_sync is not None:
+                self._start_sync.observe(sample)
+            return None
+        if self._last_start_sample_s is not None:
+            gap = sample_s - self._last_start_sample_s
+            if gap <= 0:
+                self._photogate._reset_band_state()
+                self._startup_invalid_samples += 1
+                if self._start_sync_mode == "active":
+                    raise RuntimeError("Native 采集时间倒退，禁止首组启动")
+                return None
+            if gap > .100:
+                # A stalled interval is no proof of stable visuals. Do not
+                # interpolate threshold crossing through absent frames.
+                self._photogate._reset_band_state()
+        self._last_start_sample_s = sample_s
+        prediction = None
+        if self._start_sync is not None:
+            try:
+                prediction = self._start_sync.observe(sample)
+            except Exception as exc:
+                self._start_sync_error = f"{type(exc).__name__}: {exc}"
+                if self._start_sync_mode == "active":
+                    raise RuntimeError(f"Native 首组同步失败：{self._start_sync_error}") from exc
+        legacy_anchor = None
+        try:
+            # The old190 compensation was measured against host receipt
+            # time. Preserve that boundary on real fresh frames; midpoint
+            # extrapolation belongs only to the new calibrated tracker.
+            legacy_anchor = self._photogate.observe(sample.image, float(sample.consumed_at))
+        except RuntimeError as exc:
+            if self._start_sync_mode != "active":
+                raise
+            # In active mode the old gate is an input-free comparison only.
+            self._start_sync_error = f"legacy-comparison: {exc}"
+        if legacy_anchor is not None:
+            self._legacy_anchor_candidate_s = float(legacy_anchor)
+        if self._start_sync_mode == "active":
+            rejected = getattr(self._start_sync, "rejected_reason", None)
+            if rejected:
+                raise RuntimeError(f"Native 首组未确认，禁止中途启动：{rejected}")
+            if prediction is None:
+                return None
+            correction_ms = float(self._start_sync_options["visual_phase_correction_ms"])
+            first_due = float(prediction.first_due_s) + correction_ms / 1000.0
+            source = "chart-first-group-trajectory"
+            # Predicted due already extrapolates to y590; legacy +190ms must
+            # never be applied a second time.
+            visual_lead_ms = 0.0
+            uncertainty_ms = float(prediction.uncertainty_ms)
+        else:
+            if legacy_anchor is None:
+                return None
+            first_due = float(legacy_anchor)
+            source = "fresh-frame-photogate"
+            correction_ms = 0.0
+            visual_lead_ms = PHOTOGATE_LATENCY_MS
+            uncertainty_ms = float(sample.uncertainty_ms)
+        # first_due already contains either legacy190 or the calibrated
+        # trajectory correction. This boundary subtracts transport/bias once.
+        target = trajectory_input_target_s(first_due,
+            profile_advance_ms=self._frozen_timing_offset_ms,
+            device_first_read_ms=self._first_read_delay_s * 1000.0)
+        send_lead_ms = (target - max(float(sample.consumed_at), self._clock())) * 1000.0
+        self._startup_timing_boundaries = {
+            "source": source, "capture": sample.diagnostics(),
+            "predicted_or_legacy_first_due_s": first_due,
+            "legacy_visual_lead_ms": visual_lead_ms,
+            "visual_phase_correction_ms": correction_ms,
+            "profile_advance_ms": self._frozen_timing_offset_ms,
+            "device_first_read_ms": self._first_read_delay_s * 1000.0,
+            "input_target_s": target, "send_lead_ms": send_lead_ms,
+            "uncertainty_ms": uncertainty_ms,
+            "time_basis": "request-completion-midpoint-estimate",
+            "scope": "startup-prediction-not-game-judgement-proof",
+        }
+        if self._start_sync_mode == "active" and (
+            not all(math.isfinite(value) for value in (first_due, uncertainty_ms, target, send_lead_ms))
+            or not 0 <= uncertainty_ms <= 20 or send_lead_ms < 30
+            or not .9 <= float(prediction.confidence) <= 1):
+            raise RuntimeError("Native 首组预测误差或发送提前量不足，禁止补发过期首拍")
+        self._confirm_start_device_ready()
+        self._startup_anchor_source = source
+        self._startup_send_deadline_s = target if self._start_sync_mode == "active" else None
+        return target
+
+    def start_gate_diagnostics(self) -> dict[str, object]:
+        """Read gate-only diagnostics without polling the playback session."""
+        result = self._photogate.report()
+        elapsed = ((self._startup_last_sample_s or 0) - (self._startup_first_sample_s or 0))
+        result.update({
+            "startup_sync_mode": self._start_sync_mode,
+            "startup_sync_options": dict(self._start_sync_options),
+            "startup_anchor_source": self._startup_anchor_source,
+            "startup_timing_boundaries": dict(self._startup_timing_boundaries),
+            "startup_sync_error": self._start_sync_error,
+            "startup_frames": {
+                "consumed": self._startup_sample_count, "new": self._startup_new_samples,
+                "reused": self._startup_reused_samples, "stale": self._startup_stale_samples,
+                "invalid": self._startup_invalid_samples,
+                "max_age_ms": self._startup_max_age_ms,
+                "max_uncertainty_ms": self._startup_max_uncertainty_ms,
+                "new_fps": (self._startup_new_samples-1)/elapsed if elapsed > 0 else 0.0,
+            },
+            "first_group_sync": self._start_sync.report() if self._start_sync is not None else None,
+        })
+        candidate = result.get("first_group_sync") or {}
+        predicted = candidate.get("prediction") or {}
+        if self._legacy_anchor_candidate_s is not None and predicted.get("first_due_s") is not None:
+            result["shadow_minus_legacy_ms"] = (predicted["first_due_s"] - self._legacy_anchor_candidate_s) * 1000.0
+        return result
 
     def _publish_chunk(self, chunk: dict[str, object]) -> bool:
         """把 C++ 会话给出的绝对时刻切片编译后原样追加到设备队列。"""
@@ -1746,9 +2062,16 @@ class NativeMinitouchBackend:
             self._observation_cancelled = False
             self._observation_complete.clear()
             self._calibrator = native_engine.latency_calibrator()
+            self._validate_start_dispatch(arguments[0] if len(arguments) == 1 else None)
+            wait_estimator = getattr(self, "_wait_cost_estimator", None)
+            if wait_estimator is not None:
+                wait_estimator.reset()
             if not bool(self._session.start(*arguments)):
                 self._refresh_session_snapshot()
                 return False
+            # Session preparation must not consume the final send margin.
+            # Until publish there are still no chart inputs on the device.
+            self._validate_start_dispatch(arguments[0])
             published = bool(self._session.publish())
             state = self._refresh_session_snapshot()
             if not published:
@@ -1841,10 +2164,29 @@ class NativeMinitouchBackend:
             )
             raise RuntimeError(reason)
 
+    def _validate_start_dispatch(self, anchor_s) -> None:
+        if getattr(self, "_start_sync_mode", "off") != "active":
+            return
+        deadline = getattr(self, "_startup_send_deadline_s", None)
+        try:
+            anchor = float(anchor_s)
+            now = float(self._clock())
+            valid = (deadline is not None and math.isfinite(float(deadline))
+                     and math.isfinite(anchor) and math.isfinite(now)
+                     and abs(anchor - deadline) <= 1e-6 and now <= deadline - .030)
+        except (ValueError, TypeError, OverflowError):
+            valid = False
+        if not valid:
+            raise RuntimeError("Native 首组发送提前量不足或锚点无效，禁止从歌曲中途启动")
+        self._startup_timing_boundaries.update({
+            "dispatch_checked_at_s": now, "dispatch_send_lead_ms": (deadline - now) * 1000,
+        })
+
     def start(self, anchor_s: float) -> None:
         """把谱面第一动作映射到 photogate 给出的绝对单调时刻。"""
         if self._state != "ready" or not self._device.connected:
             raise RuntimeError("Native 会话未 ready，拒绝启动")
+        self._validate_start_dispatch(anchor_s)
         self._first_action_anchor_s = float(anchor_s)
         if not bool(self._submit_session("start", self._first_action_anchor_s)):
             self._state = "failed"
@@ -1852,6 +2194,8 @@ class NativeMinitouchBackend:
         self._state = (
             "finished" if self._session_state == "finished" else "running"
         )
+        if getattr(self, "_start_sync_mode", "off") == "active" and self._start_sync is not None:
+            self._start_sync.mark_started()
         print(
             "NativeMinitouch started "
             f"run_id={self._run_id} anchor_s={self._first_action_anchor_s:.6f} "
@@ -2206,6 +2550,7 @@ class NativeMinitouchBackend:
             "first_action_anchor_s": self._first_action_anchor_s,
             "execution_timing": self._execution_timing.report(),
             "first_chunk_pipeline": self._first_chunk_pipeline_report(),
+            "startup_sync": self.start_gate_diagnostics(),
             "touch_y": float(
                 getattr(self, "_config", {}).get("judgement_y", TOUCH_Y)
             ),
@@ -2224,6 +2569,14 @@ class NativeMinitouchBackend:
             "timing_trial": {
                 "startup": self._startup_timing_trial_report(),
                 "wait_cost_recovery": self._compiler_timing_trial_report(),
+                "wait_jitter_guard": {
+                    "enabled": getattr(self, "_wait_cost_estimator", None) is not None,
+                    **(
+                        self._wait_cost_estimator.report()
+                        if getattr(self, "_wait_cost_estimator", None) is not None
+                        else {}
+                    ),
+                },
             },
             "drift_rate_correction_enabled": (
                 getattr(self, "_drift_rate_estimator", None) is not None

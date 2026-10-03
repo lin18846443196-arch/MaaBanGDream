@@ -10,7 +10,7 @@ $runtimeArchive = Join-Path $runtimeDirectory 'maabangdream-python.zip'
 $pythonRoot = Join-Path $runtimeDirectory 'python'
 $python = Join-Path $pythonRoot 'python.exe'
 $runtimeReady = Join-Path $pythonRoot '.maabangdream-ready'
-$mfa = Join-Path $packageRoot 'MFAAvalonia.exe'
+$mfa = Join-Path $packageRoot 'YesBanGDream.exe'
 $interfaceTemplate = Join-Path $packageRoot 'interface.template.json'
 $interfacePath = Join-Path $packageRoot 'interface.json'
 $profileManagerPath = Join-Path $packageRoot 'profile-manager.json'
@@ -47,7 +47,7 @@ if (
 ) {
     throw (
         'Bundled Python runtime is missing; ' +
-        'please re-download the full package (MaaBanGDream-v*-win-x64.zip).'
+        'please re-download the full package (YesBanGDream-v*-win-x64.zip).'
     )
 }
 
@@ -56,15 +56,44 @@ if (
 ) {
     $partialRoot = Join-Path $runtimeDirectory 'python.partial'
     foreach ($oldRoot in @($partialRoot, $pythonRoot)) {
+        $resolvedRuntimeRoot = [IO.Path]::GetFullPath($runtimeDirectory).TrimEnd('\') + '\'
+        if (-not [IO.Path]::GetFullPath($oldRoot).StartsWith($resolvedRuntimeRoot, [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Runtime preparation path escapes the package runtime directory.'
+        }
         if (Test-Path -LiteralPath $oldRoot) {
             [System.IO.Directory]::Delete($oldRoot, $true)
         }
     }
-    Write-Host 'Preparing bundled MaaBanGDream Python runtime ...'
-    Expand-Archive `
-        -LiteralPath $runtimeArchive `
-        -DestinationPath $partialRoot `
-        -Force
+    Write-Host 'Preparing bundled YesBanGDream Python runtime ...'
+    # Expand-Archive/Move-Item 在深目录可能静默漏掉超过 MAX_PATH 的文件。
+    # 使用 Windows 长路径前缀解压，并原子移动整个目录，不逐文件复制。
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $extendedPartialRoot = if ($partialRoot.StartsWith('\\')) {
+        '\\?\UNC\' + $partialRoot.Substring(2)
+    } else {
+        '\\?\' + $partialRoot
+    }
+    $archive = [IO.Compression.ZipFile]::OpenRead($runtimeArchive)
+    $partialPrefix = [IO.Path]::GetFullPath($partialRoot).TrimEnd('\') + '\'
+    try {
+        foreach ($entry in $archive.Entries) {
+            # ZIP 使用斜线；Windows 长路径 API 要求反斜线，并逐条确认归档边界。
+            $relative = $entry.FullName.Replace('/', '\')
+            $target = [IO.Path]::GetFullPath([IO.Path]::Combine($partialRoot, $relative))
+            if (-not $target.StartsWith($partialPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+                throw "Python archive entry escapes the runtime directory: $relative"
+            }
+            $extendedTarget = $extendedPartialRoot.TrimEnd('\') + '\' + $target.Substring($partialPrefix.Length)
+            if ($entry.FullName.EndsWith('/')) {
+                [IO.Directory]::CreateDirectory($extendedTarget) | Out-Null
+            } else {
+                [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($extendedTarget)) | Out-Null
+                [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $extendedTarget, $true)
+            }
+        }
+    } finally {
+        $archive.Dispose()
+    }
     $partialPython = Join-Path $partialRoot 'python.exe'
     $condaUnpack = Join-Path $partialRoot 'Scripts\conda-unpack.exe'
     foreach ($requiredRuntimeFile in @($partialPython, $condaUnpack)) {
@@ -72,8 +101,8 @@ if (
             throw "Bundled Python runtime is incomplete: $requiredRuntimeFile"
         }
     }
-    Move-Item -LiteralPath $partialRoot -Destination $pythonRoot
-    & (Join-Path $pythonRoot 'Scripts\conda-unpack.exe')
+    [IO.Directory]::Move($partialRoot, $pythonRoot)
+    & $python -X utf8 (Join-Path $PSScriptRoot 'prepare_portable_runtime.py') $pythonRoot
     if ($LASTEXITCODE -ne 0) {
         throw "Bundled Python path repair failed: $LASTEXITCODE"
     }
@@ -197,6 +226,33 @@ if ($NoLaunch) {
     exit 0
 }
 
+# 启动前清理过期诊断；占用和清理失败不应阻止启动，NoLaunch 仅准备配置。
+$artifactCleanup = Join-Path $PSScriptRoot 'cleanup_runtime_artifacts.py'
+if (Test-Path -LiteralPath $artifactCleanup -PathType Leaf) {
+    try {
+        & $python $artifactCleanup --root $packageRoot --skip-if-running
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning 'Runtime artifact cleanup was skipped; application startup continues.'
+        }
+    }
+    catch {
+        Write-Warning "Runtime artifact cleanup was skipped: $_"
+    }
+}
+
+# 新宿主通过运行时检查后再清理旧入口，避免覆盖式更新留下两个程序。
+foreach ($legacyHostFile in @('MFAAvalonia.exe', 'MFAAvalonia.dll', 'MFAAvalonia.deps.json', 'MFAAvalonia.runtimeconfig.json')) {
+    $legacyHostPath = Join-Path $packageRoot $legacyHostFile
+    if (Test-Path -LiteralPath $legacyHostPath -PathType Leaf) {
+        try {
+            Remove-Item -LiteralPath $legacyHostPath -Force
+        }
+        catch {
+            Write-Warning "Legacy desktop host is in use; removal skipped: $legacyHostFile"
+        }
+    }
+}
+
 $env:MAABANGDREAM_MFA_SESSION_ID = [Guid]::NewGuid().ToString('N')
 $env:MAABANGDREAM_MFA_ROOT = $packageRoot
 if ($OrderedStartupTrial) {
@@ -204,7 +260,7 @@ if ($OrderedStartupTrial) {
     $env:MAABANGDREAM_ORDERED_STARTUP = '1'
 }
 try {
-    # 浏览器下载的压缩包会给 MFAAvalonia.exe 打上 Zone.Identifier
+    # 浏览器下载的压缩包会给 YesBanGDream.exe 打上 Zone.Identifier
     # 标记，ShellExecute 启动会弹 SmartScreen 并被取消；先解除该标记。
     Unblock-File -LiteralPath $mfa -ErrorAction SilentlyContinue
     Start-Process -FilePath $mfa -WorkingDirectory $packageRoot
@@ -214,5 +270,5 @@ finally {
     Remove-Item Env:MAABANGDREAM_MFA_ROOT -ErrorAction SilentlyContinue
     Remove-Item Env:MAABANGDREAM_ORDERED_STARTUP -ErrorAction SilentlyContinue
 }
-Write-Host "MaaBanGDream started: $packageRoot"
+Write-Host "YesBanGDream started: $packageRoot"
 Write-Host "Ordered startup trial: $([bool]$OrderedStartupTrial)"

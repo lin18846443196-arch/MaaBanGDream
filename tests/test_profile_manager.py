@@ -133,13 +133,13 @@ def test_selection_state_is_written_atomically(tmp_path):
         "pinned": {"Easy": path.name},
         "runtime_options": {
             "skip_process_conflict_cleanup": False,
-            "game_effect_settings_enabled": True,
-            "note_skin_type": 1,
-            "judgement_assist_effect": True,
-            "tap_effect": 1,
+            "skip_result_check": False,
+            "note_speed_settings_enabled": True,
             "chart_prediction_enabled": True,
             "chart_predict_presses": True,
             "native_realtime_enabled": False,
+            "native_start_sync_mode": "shadow",
+            "native_start_calibration_file": "",
             "cooperative_jitter_enabled": True,
             "play_failure_retry_count": 1,
             "calibration_note_speeds": {
@@ -164,13 +164,13 @@ def test_runtime_options_default_and_atomic_update_do_not_invalidate_profile(tmp
     )
     assert listed["runtime_options"] == {
         "skip_process_conflict_cleanup": False,
-        "game_effect_settings_enabled": True,
-        "note_skin_type": 1,
-        "judgement_assist_effect": True,
-        "tap_effect": 1,
-            "chart_prediction_enabled": True,
+        "skip_result_check": False,
+        "note_speed_settings_enabled": True,
+        "chart_prediction_enabled": True,
             "chart_predict_presses": True,
             "native_realtime_enabled": False,
+            "native_start_sync_mode": "shadow",
+            "native_start_calibration_file": "",
             "cooperative_jitter_enabled": True,
             "play_failure_retry_count": 1,
             "calibration_note_speeds": {
@@ -202,31 +202,22 @@ def test_runtime_options_default_and_atomic_update_do_not_invalidate_profile(tmp
     assert not list(tmp_path.glob("*.tmp"))
 
 
-def test_list_uses_configured_visual_settings_when_environment_omits_them(tmp_path):
+def test_list_ignores_legacy_profile_visual_fields(tmp_path):
     store = RealtimeProfileStore(tmp_path)
-    visual_environment = SIGNATURE.to_mapping()
-    visual_environment.update({
-        "note_skin_type": 7,
-        "tap_effect": 4,
-        "judgement_assist_effect": False,
-    })
-    store.write(payload(environment=visual_environment, accepted=True))
-    runtime = store.runtime_options()
-    runtime.update({
-        "note_skin_type": 7,
-        "tap_effect": 4,
-        "judgement_assist_effect": False,
-    })
-    store.update_runtime_options(runtime)
     legacy_environment = SIGNATURE.to_mapping()
-    for key in ("note_skin_type", "tap_effect", "judgement_assist_effect"):
-        legacy_environment.pop(key)
+    legacy_environment.update({
+        "note_skin_type": 7,
+        "tap_effect": 5,
+        "judgement_assist_effect": True,
+    })
+    store.write(payload(environment=legacy_environment, accepted=True))
+    current_environment = SIGNATURE.to_mapping()
 
     result = handle_request(
         {
             "operation": "list",
             "difficulty": "Easy",
-            "environment": legacy_environment,
+            "environment": current_environment,
         },
         root=tmp_path,
     )
@@ -251,6 +242,21 @@ def test_legacy_life_protection_options_are_dropped_on_write(tmp_path):
     assert "life_safety_enabled" not in result["runtime_options"]
     assert "life_exit_threshold" not in result["runtime_options"]
     assert "rehearsal_ignore_life_safety" not in result["runtime_options"]
+
+
+@pytest.mark.parametrize("skip_result_check", [0, 1, "false", None])
+def test_runtime_options_reject_non_boolean_skip_result_check(
+    tmp_path,
+    skip_result_check,
+):
+    with pytest.raises(ValueError, match="skip_result_check"):
+        handle_request(
+            {
+                "operation": "update-runtime-options",
+                "runtime_options": {"skip_result_check": skip_result_check},
+            },
+            root=tmp_path,
+        )
 
 
 @pytest.mark.parametrize(
@@ -300,7 +306,15 @@ def test_special_auto_selection_prefers_exact_difficulty_before_expert(tmp_path)
     assert result["selection"]["profile"] != expert.name
 
 
-@pytest.mark.parametrize("retry_count", [-1, 4, True, 1.5, "two"])
+@pytest.mark.parametrize("retry_count", [0, 1, 4, 99])
+def test_runtime_options_accept_new_retry_limit(tmp_path, retry_count):
+    handle_request({"operation": "update-runtime-options", "runtime_options": {
+        "play_failure_retry_count": retry_count,
+    }}, root=tmp_path)
+    assert RealtimeProfileStore(tmp_path).runtime_options()["play_failure_retry_count"] == retry_count
+
+
+@pytest.mark.parametrize("retry_count", [-1, 100, True, 1.5, "two"])
 def test_runtime_options_reject_invalid_play_failure_retry_count(
     tmp_path,
     retry_count,

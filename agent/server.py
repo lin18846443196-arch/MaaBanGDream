@@ -5,7 +5,10 @@ import sys
 from maa.agent.agent_server import AgentServer
 from maa.tasker import Tasker
 
-from realtime.runtime_flags import configure_agent_runtime_flags
+from realtime.runtime_flags import (
+    configure_agent_runtime_flags,
+    native_wait_jitter_trial_enabled,
+)
 
 import common_recover  # noqa: F401 - registration happens at import time
 import live_select  # noqa: F401 - registration happens at import time
@@ -27,6 +30,10 @@ import realtime.performance_settings_action  # noqa: F401 - registration happens
 import realtime.game_effect_settings_action  # noqa: F401 - registration happens at import time
 import realtime.random_song_action  # noqa: F401 - registration happens at import time
 import realtime.cooperative_action  # noqa: F401 - registration happens at import time
+import realtime.team_action  # noqa: F401 - registration happens at import time
+import realtime.challenge_points  # noqa: F401 - registration happens at import time
+import realtime.challenge_play  # noqa: F401 - registration happens at import time
+import realtime.medley_action  # noqa: F401 - registration happens at import time
 import realtime.daily_free_gacha  # noqa: F401 - registration happens at import time
 
 
@@ -37,7 +44,10 @@ def main() -> None:
     print(
         "Agent runtime flags: "
         "native_timing_compensation="
-        f"{runtime_flags['native_timing_compensation']}",
+        f"{runtime_flags['native_timing_compensation']} "
+        f"native_wait_jitter_trial={native_wait_jitter_trial_enabled()} "
+        "cooperative_member_loading_guard_trial="
+        f"{runtime_flags['cooperative_member_loading_guard_trial']}",
         flush=True,
     )
     Tasker.set_log_dir("./debug")
