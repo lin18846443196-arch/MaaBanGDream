@@ -16,7 +16,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-6f42c1" alt="License"></a>
 </p>
 
-YesBanGDream 是基于 [MaaBanGDream](https://github.com/coatcn1/MaaBanGDream) 的非官方版本，由 **woshiyigeanniu** 独立维护，使用 [MaaFramework](https://github.com/MaaXYZ/MaaFramework) 和定制 MFAAvalonia 控制 Android 模拟器。
+YesBanGDream 是基于 [MaaBanGDream](https://github.com/coatcn1/MaaBanGDream) 的非官方版本，使用 [MaaFramework](https://github.com/MaaXYZ/MaaFramework) 和定制 MFAAvalonia 控制 Android 模拟器。
 
 当前发布版本为 **2.0.1**
 
