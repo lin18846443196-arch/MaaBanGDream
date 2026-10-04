@@ -18,7 +18,7 @@
 
 YesBanGDream 是基于 [MaaBanGDream](https://github.com/coatcn1/MaaBanGDream) 的非官方版本，由 **woshiyigeanniu** 独立维护，使用 [MaaFramework](https://github.com/MaaXYZ/MaaFramework) 和定制 MFAAvalonia 控制 Android 模拟器。
 
-当前发布版本为 **2.0.1**，以本地定制的上游 **1.4.3** 为基线，已同步上游 **1.4.4 / 1.4.5** 的相关改进。项目名称、图标、更新源和版本号独立维护；仓库地址继续使用 `woshiyigeanniu/YesBanGDream`。
+当前发布版本为 **2.0.1**
 
 2.0.1 更新双角色相框图标，修复协力准备页误判、直接启动时的 Profile 通信错误及 MuMu 前台额外切换；同时提供 Legacy / Native Expert 默认校准。最近一次 MuMu Native Expert 协力完成 5/5，具体结果与保留的问题见 [验证状态](docs/validation-v2.0.1.md)。
 
